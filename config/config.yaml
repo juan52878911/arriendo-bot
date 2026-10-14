@@ -1,0 +1,48 @@
+# Qué busco y cómo se puntúa. Se relee en cada inmueble: cambiar un valor no exige reiniciar nada.
+
+busqueda:
+  canon_total_max: 3000000        # arriendo + administración
+  habitaciones_min: 3
+  banos_min: 2
+  tiempo_max_min: 45              # puerta a puerta al destino (lo calcula Fredy con Transitous)
+  localidades_excluidas: []
+  # Palabras que delatan que una "habitación" no lo es.
+  habitacion_falsa: [estudio, "cuarto de servicio", "alcoba de servicio"]
+
+zonas_preferidas:
+  # Sectores catastrales (≈ barrios). Coincidencia sin tildes y por prefijo:
+  # "SANTA BARBARA" incluye SANTA BARBARA OCCIDENTAL.
+  sectores: []
+  # Medio punto si cae en la localidad aunque no en un barrio de la lista.
+  localidades: []
+
+pesos:                            # suman 100
+  zona: 15
+  precio_m2: 15
+  seguridad: 15
+  tiempo: 10
+  area: 10
+  estrato: 5
+  cocina: 10
+  amenidades: 10
+  transporte: 5
+  luz: 5
+
+parametros:
+  area_min_m2: 55                 # 0 puntos de área
+  area_buena_m2: 75               # puntaje completo de área
+  tiempo_ideal_min: 25
+  estratos: {"1": 0.0, "2": 0.3, "3": 1.0, "4": 1.0, "5": 0.5, "6": 0.2}
+  tm_buena_m: 400                 # estación troncal a esta distancia o menos: puntaje completo
+  tm_lejos_m: 1500
+  muestra_min_precio: 5           # inmuebles vistos en la zona para comparar precio/m²
+  estafa_ratio: 0.6               # por debajo de 0,6 veces la mediana de la zona: posible estafa
+
+palabras:
+  cocina: [horno, "gas natural", gas, extractor, "cocina integral", meson, mesón, "cocina abierta"]
+  amenidades: [ascensor, porteria, portería, vigilancia, recepcion, recepción, bicicletero]
+  luz: [exterior, iluminado, "luz natural", vista, balcon, balcón, ventanal, terraza]
+
+avisos:
+  umbral: 70                      # puntaje mínimo para avisar por Telegram
+  avisar_bajadas_de_precio: true

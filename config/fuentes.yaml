@@ -1,0 +1,34 @@
+# Datos abiertos que alimentan el puntaje. `python -m arriendo.ingesta` los descarga y los carga en
+# PostGIS. Añadir una fuente es añadir una entrada aquí y, si hace falta, su lector en ingesta.py.
+
+- id: seguridad_sector
+  descripcion: Incidentes reportados (hurto, riñas, disparos, porte de armas) por sector catastral, ene-ago de cada año
+  entidad: Secretaría Distrital de Seguridad, Convivencia y Justicia
+  tipo: arcgis
+  url: https://oaiee.scj.gov.co/agc/rest/services/Tematicos_Pub/CifrasSCJ/MapServer/7
+  tabla: sector
+  frecuencia_dias: 30
+
+- id: delitos_localidad
+  descripcion: Delitos de alto impacto por localidad (variación anual)
+  entidad: Secretaría Distrital de Seguridad, Convivencia y Justicia
+  tipo: arcgis
+  url: https://oaiee.scj.gov.co/agc/rest/services/Tematicos_Pub/CifrasSCJ/MapServer/0
+  tabla: localidad
+  frecuencia_dias: 30
+
+- id: estratos
+  descripcion: Estrato socioeconómico por lote; se resume en el estrato dominante de cada sector catastral
+  entidad: Secretaría Distrital de Planeación
+  tipo: csv_zip
+  url: https://datosabiertos.bogota.gov.co/dataset/68ccdaca-5403-4fe6-b727-be01b5d28f15/resource/f1d91324-af38-405e-ad13-026c50448ed1/download/esoc.csv.zip
+  tabla: sector
+  frecuencia_dias: 90
+
+- id: estaciones_tm
+  descripcion: Estaciones troncales de TransMilenio
+  entidad: TransMilenio S.A.
+  tipo: arcgis
+  url: https://gis.transmilenio.gov.co/arcgis/rest/services/Troncal/consulta_estaciones_troncales/MapServer/0
+  tabla: estacion_tm
+  frecuencia_dias: 90

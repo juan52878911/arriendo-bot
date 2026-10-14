@@ -1,0 +1,29 @@
+"""Conexión a PostGIS y utilidades de configuración."""
+
+import os
+from pathlib import Path
+
+import psycopg
+import yaml
+from psycopg.rows import dict_row
+
+CONFIG_DIR = Path(os.environ.get("ARRIENDO_CONFIG", "/config"))
+
+
+def connect() -> psycopg.Connection:
+    return psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row, autocommit=True)
+
+
+def migrate() -> None:
+    schema = (Path(__file__).parent / "schema.sql").read_text()
+    with connect() as conn:
+        conn.execute(schema)
+
+
+def config() -> dict:
+    """Se relee en cada uso: cambiar config.yaml no exige reiniciar."""
+    return yaml.safe_load((CONFIG_DIR / "config.yaml").read_text())
+
+
+def fuentes() -> list[dict]:
+    return yaml.safe_load((CONFIG_DIR / "fuentes.yaml").read_text())

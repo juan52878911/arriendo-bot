@@ -1,0 +1,88 @@
+name: arriendo
+
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_DB: arriendo
+      POSTGRES_USER: arriendo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arriendo -d arriendo"]
+      interval: 10s
+      retries: 10
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  scorer:
+    build: ./scorer
+    environment:
+      DATABASE_URL: postgresql://arriendo:${POSTGRES_PASSWORD}@db/arriendo
+      ARRIENDO_TOKEN: ${ARRIENDO_TOKEN}
+      ARRIENDO_WEB_URL: ${ARRIENDO_WEB_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./config:/config:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  fredy:
+    # fredy/build.sh prepara este directorio: Fredy fijado a un commit + el portal Fincaraíz.
+    build: ./fredy/upstream
+    environment:
+      ARRIENDO_RAW_URL: http://scorer:8000/raw
+      ARRIENDO_TOKEN: ${ARRIENDO_TOKEN}
+      FINCARAIZ_MAX_PAGES: ${FINCARAIZ_MAX_PAGES:-3}
+      TZ: America/Bogota
+    # Disco local, no el NAS: SQLite sobre NFS corrompe con los bloqueos de WAL.
+    volumes:
+      - fredy-conf:/conf
+      - fredy-db:/db
+    ports:
+      - "9998:9998"
+    depends_on:
+      - scorer
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  respaldo:
+    # Copia diaria de PostGIS al NAS de ascci (montado en /data del LXC); guarda 14 días.
+    image: postgis/postgis:17-3.5
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /data/respaldos:/respaldos
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while true; do
+          pg_dump -h db -U arriendo -Fc arriendo > /respaldos/arriendo-$$(date +%F).dump &&
+          find /respaldos -name 'arriendo-*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  fredy-conf:
+  fredy-db:
