@@ -21,14 +21,15 @@ pesos:                            # suman 100
   precio_m2: 10
   seguridad: 15
   tiempo: 10
-  area: 10
+  area: 5
   aire_ruido: 10                  # distancia a vías principales (OSM): ruido y aire de la cuadra
   estrato: 5
   cocina: 5
   amenidades: 5
   transporte: 5
   entorno: 5                      # parque grande cerca, supermercados o plaza de mercado
-  luz: 5
+  fotos: 10                       # lo que el servicio de visión ve en las fotos (config/vision.yaml)
+  luz: 0                          # palabras sobre luz; las fotos ya lo miden
 
 parametros:
   area_min_m2: 55                 # 0 puntos de área
@@ -46,7 +47,7 @@ parametros:
   parque_cerca_m: 300
   parque_lejos_m: 1200
   mercado_radio_m: 600
-  siniestros_alerta: 15
+  siniestros_alerta: 100          # en 150 m entre 2015 y 2021; 30-80 es lo normal en Bogotá
 
 palabras:
   cocina: [horno, "gas natural", gas, extractor, "cocina integral", meson, mesón, "cocina abierta"]
@@ -56,3 +57,4 @@ palabras:
 avisos:
   umbral: 60                      # puntaje mínimo para avisar por Telegram
   avisar_bajadas_de_precio: true
+  margen_fotos: 15                # analizar fotos solo si el puntaje sin fotos está a 15 o menos del umbral

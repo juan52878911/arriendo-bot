@@ -99,3 +99,15 @@ def test_avenida_cerca_alerta_y_baja_aire_ruido():
 
 def test_pesos_suman_100():
     assert sum(CFG["pesos"].values()) == 100
+
+
+def test_fotos_suben_o_bajan_y_avisan_renders():
+    buenas = {"n": 8, "espacios": ["cocina"], "horno": 0.9, "gas": 0.9, "extractor": 0.8,
+              "piso_bueno": 0.8, "ducha_division": 0.9, "luz": 0.8, "render": 0.1}
+    r = evaluar(base(), {"fotos": buenas}, CFG)
+    assert r["detalle"]["fotos"]["valor"] > 0.8
+    renders = dict(buenas, render=0.9)
+    r2 = evaluar(base(), {"fotos": renders}, CFG)
+    assert r2["detalle"]["fotos"]["valor"] < 0.5 and any("render" in a for a in r2["alertas"])
+    sin_cocina = dict(buenas, horno=None, gas=None, extractor=None)
+    assert any("cocina" in a for a in evaluar(base(), {"fotos": sin_cocina}, CFG)["alertas"])

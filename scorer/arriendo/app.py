@@ -10,7 +10,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+import yaml
 
 from . import db, externos, ingesta
 from .externos import e
@@ -279,6 +280,42 @@ def duplicado(conn, i: dict) -> str | None:
     return otro["id"] if otro else None
 
 
+def resumen_fotos(conn, id_: str) -> dict | None:
+    """Lo que dicen las fotos de un inmueble, agregado por criterio."""
+    fotos = conn.execute("SELECT espacio, etiquetas FROM foto WHERE inmueble = %s", (id_,)).fetchall()
+    if not fotos:
+        return None
+
+    def p(cabeza: str, clase: str, espacios: tuple | None = None, agg=max) -> float | None:
+        v = [f["etiquetas"][cabeza][clase] for f in fotos
+             if cabeza in f["etiquetas"] and (espacios is None or f["espacio"] in espacios)]
+        return agg(v) if v else None
+
+    media = lambda v: sum(v) / len(v)
+    piso = [f["etiquetas"]["piso"] for f in fotos if "piso" in f["etiquetas"]]
+    return {
+        "n": len(fotos),
+        "espacios": sorted({f["espacio"] for f in fotos}),
+        "horno": p("horno", "si"), "gas": p("estufa", "gas"), "extractor": p("extractor", "si"),
+        "piso_bueno": media([x.get("porcelanato", 0) + x.get("laminado", 0) for x in piso]) if piso else None,
+        "ducha_division": p("ducha", "division"),
+        "luz": p("luz", "alta", agg=media),
+        "render": p("render", "render"),
+    }
+
+
+def analizar_fotos(conn, i: dict) -> None:
+    urls = [u for u in (i["imagenes"] or []) if u]
+    if not urls:
+        return
+    r = externos.vision("/analizar", {"urls": urls})
+    for f in (r or {}).get("fotos", []):
+        conn.execute("""INSERT INTO foto (url, inmueble, espacio, etiquetas, emb) VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (url) DO UPDATE SET espacio = EXCLUDED.espacio, etiquetas = EXCLUDED.etiquetas,
+                          emb = EXCLUDED.emb, analizada = now()""",
+                     (f["url"], i["id"], f["espacio"], json.dumps(f["etiquetas"]), f["emb"]))
+
+
 def puntuar(id_: str) -> None:
     cfg = db.config()
     with db.connect() as conn:
@@ -304,6 +341,12 @@ def puntuar(id_: str) -> None:
                 i["externos"] = ext
             ctx.update(ext)
             r = evaluar(i, ctx, cfg)
+            # Fotos solo para quien ya está cerca del umbral: son la consulta más cara.
+            if r["puntaje"] >= cfg["avisos"]["umbral"] - cfg["avisos"].get("margen_fotos", 15):
+                if not conn.execute("SELECT 1 FROM foto WHERE inmueble = %s LIMIT 1", (id_,)).fetchone():
+                    analizar_fotos(conn, i)
+        ctx["fotos"] = resumen_fotos(conn, id_)
+        r = evaluar(i, ctx, cfg)
         conn.execute("""UPDATE inmueble SET sector = %s, localidad = %s, tm_m = %s, tiempo_min = %s,
                           tiempo_fuente = %s, puntaje = %s, detalle = %s, descartes = %s, alertas = %s,
                           duplicado_de = %s
@@ -408,6 +451,101 @@ def sectores() -> dict:
 def fuentes() -> list[dict]:
     with db.connect() as conn:
         return conn.execute("SELECT * FROM fuente ORDER BY id").fetchall()
+
+
+# Etiquetado y entrenamiento de las cabezas de visión ---------------------------------------------
+
+@app.get("/api/etiquetar/siguiente")
+def siguiente(cabeza: str) -> dict:
+    """La foto más dudosa para esa cabeza que todavía no tiene etiqueta."""
+    cfg = yaml.safe_load((db.CONFIG_DIR / "vision.yaml").read_text())
+    if cabeza not in cfg["cabezas"]:
+        raise HTTPException(status_code=404)
+    with db.connect() as conn:
+        f = conn.execute("""
+            SELECT f.url, f.inmueble, f.espacio, f.etiquetas->%(c)s AS pred
+            FROM foto f LEFT JOIN etiqueta e ON e.url = f.url AND e.cabeza = %(c)s
+            WHERE e.url IS NULL AND f.etiquetas ? %(c)s
+            ORDER BY (SELECT max(v::float) FROM jsonb_each_text(f.etiquetas->%(c)s) AS t(k, v)) ASC
+            LIMIT 1""", {"c": cabeza}).fetchone()
+        hechas = conn.execute("SELECT count(*) AS n FROM etiqueta WHERE cabeza = %s", (cabeza,)).fetchone()["n"]
+    return {"foto": f, "clases": cfg["cabezas"][cabeza]["clases"], "etiquetadas": hechas}
+
+
+@app.post("/api/etiquetas")
+def etiquetar(cuerpo: dict) -> dict:
+    with db.connect() as conn:
+        conn.execute("""INSERT INTO etiqueta (url, cabeza, clase) VALUES (%(url)s, %(cabeza)s, %(clase)s)
+                        ON CONFLICT (url, cabeza) DO UPDATE SET clase = EXCLUDED.clase, creada = now()""", cuerpo)
+    return {"ok": True}
+
+
+@app.post("/api/entrenar")
+def entrenar() -> dict:
+    """Entrena con las etiquetas, reclasifica todas las fotos guardadas y repuntúa."""
+    with db.connect() as conn:
+        filas = conn.execute("""SELECT e.cabeza, e.clase, f.emb FROM etiqueta e JOIN foto f ON f.url = e.url""").fetchall()
+        ejemplos: dict = {}
+        for r in filas:
+            ejemplos.setdefault(r["cabeza"], []).append({"emb": r["emb"], "clase": r["clase"]})
+        informe = externos.vision("/entrenar", {"ejemplos": ejemplos})
+        if informe is None:
+            raise HTTPException(status_code=503, detail="servicio de visión no disponible")
+        fotos = conn.execute("SELECT url, emb FROM foto WHERE emb IS NOT NULL").fetchall()
+        for lote in range(0, len(fotos), 200):
+            r = externos.vision("/clasificar", {"fotos": fotos[lote:lote + 200]}) or {"fotos": []}
+            for f in r["fotos"]:
+                conn.execute("UPDATE foto SET espacio = %s, etiquetas = %s WHERE url = %s",
+                             (f["espacio"], json.dumps(f["etiquetas"]), f["url"]))
+        ids = [r["inmueble"] for r in conn.execute("SELECT DISTINCT inmueble FROM foto")]
+    for id_ in ids:
+        pendientes.put(id_)
+    return {"cabezas": informe, "repuntuando": len(ids)}
+
+
+@app.get("/etiquetar")
+def pagina_etiquetar() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "etiquetar.html")
+
+
+# Historial para chrono ------------------------------------------------------------------------
+
+@app.get("/api/historial.jsonl")
+def historial(dias_retiro: int = 3) -> Response:
+    """Eventos del mercado en el formato JSONL que lee chrono (`chrono add historial.jsonl`):
+    `service` es el barrio catastral, así `chrono top`/`timeline`/`correlate` agrupan por zona.
+
+    nuevo = primera vez visto · baja/sube = cambio de precio · retirado = sin verse en `dias_retiro` días.
+    """
+    with db.connect() as conn:
+        filas = conn.execute("""
+            WITH p AS (
+              SELECT inmueble, visto, total, lag(total) OVER (PARTITION BY inmueble ORDER BY visto) AS antes
+              FROM precio)
+            SELECT p.inmueble, p.visto, p.total, p.antes, i.portal, i.area, i.habitaciones,
+                   coalesce(s.nombre, i.barrio_portal, 'SIN ZONA') AS zona, i.localidad
+            FROM p JOIN inmueble i ON i.id = p.inmueble LEFT JOIN sector s ON s.codigo = i.sector
+            UNION ALL
+            SELECT i.id, i.visto_ultimo + make_interval(days => %s), NULL, i.total, i.portal, i.area,
+                   i.habitaciones, coalesce(s.nombre, i.barrio_portal, 'SIN ZONA'), i.localidad
+            FROM inmueble i LEFT JOIN sector s ON s.codigo = i.sector
+            WHERE i.visto_ultimo < now() - make_interval(days => %s)
+            ORDER BY 2""", (dias_retiro, dias_retiro)).fetchall()
+    lineas = []
+    for f in filas:
+        if f["total"] is None:
+            tipo, msg = "retirado", f"retirado {f['inmueble']} (último ${f['antes']:,.0f})"
+        elif f["antes"] is None:
+            tipo, msg = "nuevo", f"nuevo {f['inmueble']} ${f['total']:,.0f} {f['habitaciones'] or '?'} hab {f['area'] or '?'} m²"
+        else:
+            tipo = "baja" if f["total"] < f["antes"] else "sube"
+            msg = f"{tipo} {f['inmueble']} ${f['antes']:,.0f} → ${f['total']:,.0f}"
+        lineas.append(json.dumps({
+            "id": f"{f['inmueble']}@{f['visto'].isoformat()}", "ts": f["visto"].isoformat(),
+            "msg": msg.replace(",", "."), "level": tipo, "service": f["zona"], "localidad": f["localidad"],
+            "portal": f["portal"], "total": f["total"] or f["antes"], "area": f["area"],
+            "habitaciones": f["habitaciones"]}, ensure_ascii=False))
+    return Response("\n".join(lineas) + "\n", media_type="application/x-ndjson")
 
 
 @app.get("/salud")

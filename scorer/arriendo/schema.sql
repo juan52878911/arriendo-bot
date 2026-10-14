@@ -123,3 +123,22 @@ CREATE TABLE IF NOT EXISTS precio (
   total     bigint NOT NULL,
   PRIMARY KEY (inmueble, visto)
 );
+
+-- Visión: un vector por foto (SigLIP) y lo que dicen las cabezas; etiquetas puestas a mano.
+CREATE TABLE IF NOT EXISTS foto (
+  url        text PRIMARY KEY,
+  inmueble   text NOT NULL REFERENCES inmueble (id) ON DELETE CASCADE,
+  espacio    text,
+  etiquetas  jsonb,
+  emb        real[],
+  analizada  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS foto_inmueble ON foto (inmueble);
+
+CREATE TABLE IF NOT EXISTS etiqueta (
+  url     text NOT NULL REFERENCES foto (url) ON DELETE CASCADE,
+  cabeza  text NOT NULL,
+  clase   text NOT NULL,
+  creada  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (url, cabeza)
+);

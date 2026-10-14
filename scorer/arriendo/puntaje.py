@@ -142,6 +142,31 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
     if contexto.get("suelo_m2") and detalle.get("precio_m2"):
         detalle["precio_m2"]["nota"] += f"; suelo de la manzana ${contexto['suelo_m2']:,.0f}/m² (Catastro)".replace(",", ".")
 
+    f = contexto.get("fotos")
+    if f:
+        partes, notas = [], []
+        if f["horno"] is not None:
+            cocina = [x for x in (f["horno"], f["gas"], f["extractor"]) if x is not None]
+            partes.append(sum(cocina) / len(cocina))
+            notas.append(f"cocina: horno {f['horno']:.0%}, gas {f['gas'] or 0:.0%}, extractor {f['extractor'] or 0:.0%}")
+        else:
+            partes.append(0.3)
+            alertas.append("Las fotos no muestran la cocina: pide verla antes de ir")
+        acabados = [x for x in (f["piso_bueno"], f["ducha_division"]) if x is not None]
+        if acabados:
+            partes.append(sum(acabados) / len(acabados))
+            notas.append(f"piso porcelanato o laminado {f['piso_bueno'] or 0:.0%}, ducha con división {f['ducha_division'] or 0:.0%}")
+        if f["luz"] is not None:
+            partes.append(f["luz"])
+            notas.append(f"luz {f['luz']:.0%}")
+        valor = sum(partes) / len(partes)
+        if (f["render"] or 0) > 0.7:
+            valor *= 0.5
+            alertas.append("Algunas fotos parecen renders, no fotos reales")
+        poner("fotos", valor, f"{f['n']} fotos · " + "; ".join(notas))
+    else:
+        poner("fotos", 0.5, "fotos sin analizar")
+
     luz = _palabras(texto, cfg["palabras"]["luz"])
     if (i.get("piso") or 0) >= 4:
         luz.append(f"piso {i['piso']}")

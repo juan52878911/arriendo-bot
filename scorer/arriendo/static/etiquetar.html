@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Etiquetar fotos</title>
+<style>
+  :root { --bg:#f7f6f2; --card:#fff; --text:#22211e; --muted:#6b6962; --line:#e3e1da; --accent:#0f6e56; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1a; --card:#262624; --text:#ecebe6; --muted:#a3a19a; --line:#3a3936; --accent:#5dcaa5; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 4px; font-weight:600; }
+  .muted { color:var(--muted); font-size:13px; }
+  select, button { font:inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }
+  button.clase { min-width:120px; }
+  button.clase:hover, button.primario { border-color:var(--accent); color:var(--accent); }
+  .foto { margin:16px 0; background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .foto img { width:100%; max-height:60vh; object-fit:contain; background:#000; display:block; }
+  .foto div { padding:10px 12px; }
+  .botones { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+  pre { white-space:pre-wrap; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:13px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Etiquetar fotos</h1>
+  <p class="muted">Cada cabeza aprende de tus respuestas. Te muestro primero las fotos donde el modelo duda más.
+    Con unas 20-30 por clase basta para entrenar. Teclas 1-9 para responder, 0 para saltar.</p>
+  <label>Criterio <select id="cabeza"></select></label>
+  <span class="muted" id="cuenta"></span>
+  <div id="area"></div>
+  <div class="botones">
+    <button class="primario" id="entrenar">Entrenar con mis etiquetas</button>
+    <a href="./" style="align-self:center">← mapa</a>
+  </div>
+  <pre id="informe" hidden></pre>
+</main>
+<script>
+const CABEZAS = ['espacio', 'horno', 'estufa', 'extractor', 'piso', 'ducha', 'luz', 'render'];
+const sel = document.getElementById('cabeza');
+CABEZAS.forEach(c => sel.add(new Option(c, c)));
+try { sel.value = localStorage.getItem('cabeza') || 'espacio'; } catch (e) {}
+let actual = null, clases = [];
+
+async function siguiente() {
+  try { localStorage.setItem('cabeza', sel.value); } catch (e) {}
+  const r = await (await fetch('api/etiquetar/siguiente?cabeza=' + sel.value)).json();
+  document.getElementById('cuenta').textContent = ` · ${r.etiquetadas} etiquetadas`;
+  const area = document.getElementById('area');
+  actual = r.foto; clases = Object.keys(r.clases);
+  if (!actual) { area.innerHTML = '<p class="muted">No quedan fotos sin etiquetar para este criterio.</p>'; return; }
+  const pred = Object.entries(actual.pred || {}).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(' · ');
+  area.innerHTML = `<div class="foto"><img src="${actual.url}" alt=""><div class="muted">El modelo cree: ${pred}<br>
+    espacio: ${actual.espacio} · inmueble ${actual.inmueble}</div></div>
+    <div class="botones">${clases.map((c, i) => `<button class="clase" data-c="${c}" title="${r.clases[c]}">${i + 1}. ${c}</button>`).join('')}
+    <button data-c="">0. saltar</button></div>`;
+  area.querySelectorAll('button').forEach(b => b.onclick = () => responder(b.dataset.c));
+}
+
+async function responder(clase) {
+  if (actual && clase) {
+    await fetch('api/etiquetas', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: actual.url, cabeza: sel.value, clase }) });
+  }
+  siguiente();
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === '0') responder('');
+  const n = Number(e.key); if (n >= 1 && n <= clases.length) responder(clases[n - 1]);
+});
+sel.onchange = siguiente;
+document.getElementById('entrenar').onclick = async () => {
+  const pre = document.getElementById('informe'); pre.hidden = false; pre.textContent = 'Entrenando…';
+  const r = await fetch('api/entrenar', { method: 'POST' });
+  pre.textContent = JSON.stringify(await r.json(), null, 2);
+};
+siguiente();
+</script>
+</body>
+</html>

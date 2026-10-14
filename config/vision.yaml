@@ -1,0 +1,56 @@
+# Cabezas del servicio de visión. Cada una clasifica una cosa concreta a partir del vector que SigLIP
+# calcula una vez por foto. Sin etiquetas funcionan "zero-shot" comparando con estas frases (en
+# inglés: el modelo se entrenó así). Con etiquetas tuyas (página /etiquetar) se entrena una regresión
+# logística por cabeza, que solo reemplaza al zero-shot si acierta más en validación cruzada.
+#
+# `aplica_a`: solo se evalúa en fotos que la cabeza `espacio` clasificó como esos espacios.
+
+modelo: google/siglip-base-patch16-224
+fotos_por_inmueble: 12
+
+cabezas:
+  espacio:
+    clases:
+      cocina: a photo of a kitchen
+      bano: a photo of a bathroom
+      alcoba: a photo of a bedroom
+      sala: a photo of a living room
+      fachada: a photo of a building facade from the street
+      plano: an architectural floor plan
+      otro: a photo of a hallway, balcony or other space
+  horno:
+    aplica_a: [cocina]
+    clases:
+      si: a kitchen with a built-in oven
+      no: a kitchen with no oven, only a cooktop
+  estufa:
+    aplica_a: [cocina]
+    clases:
+      gas: a gas stove with metal burners and grates
+      electrica: a flat black electric ceramic cooktop
+  extractor:
+    aplica_a: [cocina]
+    clases:
+      si: a kitchen with a range hood above the stove
+      no: a kitchen without a range hood
+  piso:
+    aplica_a: [sala, alcoba, cocina]
+    clases:
+      porcelanato: a large-format porcelain tile floor
+      laminado: a laminate wood floor
+      baldosa_vieja: an old small ceramic tile floor
+      alfombra: a carpeted floor
+  ducha:
+    aplica_a: [bano]
+    clases:
+      division: a shower with a glass screen
+      cortina: a shower with a plastic curtain
+  luz:
+    aplica_a: [sala, alcoba, cocina]
+    clases:
+      alta: a bright room with large windows and natural light
+      baja: a dark room with small windows
+  render:
+    clases:
+      render: a computer generated 3D render of an apartment interior
+      real: a real photograph of an apartment interior

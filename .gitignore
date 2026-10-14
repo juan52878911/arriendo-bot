@@ -2,3 +2,5 @@
 fredy/upstream/
 __pycache__/
 *.pyc
+chrono/historial.jsonl
+chrono/.chrono/

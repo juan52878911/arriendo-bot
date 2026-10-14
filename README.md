@@ -5,17 +5,22 @@ abiertos de la ciudad (seguridad, estratos, TransMilenio), le pone un puntaje de
 `config/config.yaml` y avisa por Telegram los que valen la pena. No usa IA para funcionar.
 
 ```
-Fredy (captura Fincaraíz) ──raw──► scorer ──► PostGIS ◄── ingesta (datos abiertos)
-        │                            │
-        └──webhook (enlace) ─────────┤──► Telegram
-                                     └──► mapa y ranking  http://<servidor>:8000
+Fredy (Fincaraíz, Metrocuadrado, Ciencuadras) ──raw──► scorer ──► PostGIS ◄── ingesta (datos abiertos, OSM)
+        │                                                │  ▲
+        └──webhook (enlace) ─────────────────────────────┤  └── vision (SigLIP + cabezas, fotos)
+                                                         ├──► Telegram
+                                                         ├──► mapa y ranking   http://<servidor>:8000
+                                                         ├──► etiquetar fotos  http://<servidor>:8000/etiquetar
+                                                         └──► historial.jsonl ──► chrono
 ```
 
 | Pieza | Qué hace |
 |---|---|
-| [Fredy](https://github.com/orangecoding/fredy) | Programa las búsquedas, deduplica, guarda historial y tiene su propia interfaz (`:9998`). Se construye desde su código, fijado a un commit, con el portal `fredy/fincaraiz.js`. |
+| [Fredy](https://github.com/orangecoding/fredy) | Programa las búsquedas, deduplica, guarda historial y tiene su propia interfaz (`:9998`). Se construye desde su código, fijado a un commit, con los portales `fredy/fincaraiz.js`, `fredy/metrocuadrado.js` y `fredy/ciencuadras.js`. |
 | `scorer/` | Recibe cada anuncio, lo ubica en su sector catastral, aplica los filtros duros, calcula el tiempo al destino con [Transitous](https://transitous.org), puntúa y avisa. Sirve el mapa. |
 | `config/fuentes.yaml` | Datos abiertos que se descargan (cada 30 a 90 días) y cargan en PostGIS. |
+| `vision/` | SigLIP calcula un vector por foto; cabezas pequeñas (`config/vision.yaml`) clasifican espacio, horno, estufa, extractor, piso, ducha, luz y renders. Solo analiza fotos de candidatos cerca del umbral. |
+| `chrono/sync.sh` | Baja el historial (nuevo, bajas, subidas, retirados por barrio) y lo indexa con chrono. |
 | `respaldo` | Copia diaria de la base al NAS (`/data/respaldos`), 14 días. |
 
 ## Puesta en marcha (servidor)
@@ -56,6 +61,21 @@ Sin token, los avisos solo quedan en el log del scorer.
 curl -X POST -H "Authorization: Bearer $ARRIENDO_TOKEN" http://localhost:8000/api/recalcular
 ```
 
+## Enseñarle a ver las fotos
+
+Las cabezas empiezan "zero-shot" (comparan la foto con frases). En `http://<servidor>:8000/etiquetar`
+eliges un criterio y respondes con las teclas 1-9; primero salen las fotos donde el modelo más duda.
+Con unas 20-30 por clase, **Entrenar** ajusta una regresión logística por cabeza y la usa solo si
+acierta más que el zero-shot en validación cruzada; luego reclasifica todas las fotos guardadas y
+repuntúa, sin volver a descargarlas.
+
+## Historial con chrono
+
+```bash
+sh chrono/sync.sh            # en tu Mac, con chrono instalado
+cd chrono && chrono top entity && chrono events --level baja
+```
+
 ## Datos y sus límites
 
 | Capa | Fuente | Granularidad |
@@ -65,7 +85,13 @@ curl -X POST -H "Authorization: Bearer $ARRIENDO_TOKEN" http://localhost:8000/ap
 | Estrato | Secretaría de Planeación: estrato por lote | Se resume por sector catastral |
 | TransMilenio | TransMilenio S.A.: estaciones troncales | Puntos |
 | Tiempo al destino | Transitous (GTFS de TransMilenio y SITP) | Por inmueble, salida 7:30 de un día hábil |
+| Aire y ruido | OpenStreetMap: distancia a vías principales | Por inmueble (indicador; la red de calidad del aire de la SDA no respondió) |
+| Entorno | OpenStreetMap: parques de 2 ha o más, supermercados y plazas, ciclorrutas | Por inmueble |
+| Valor del suelo | Catastro: mediana del m² de terreno por manzana, 2026 | Por inmueble (informativo) |
+| Siniestros viales | Secretaría de Movilidad, histórico 2015-2021 | A menos de 150 m (alerta) |
 
+- Las coordenadas vienen de los portales y a veces son aproximadas: "a 30 m de una avenida" es una
+  alerta para revisar en la visita, no un descarte.
 - La seguridad mide incidentes por km², no por habitante: un sector comercial muy concurrido sale peor
   que uno residencial con la misma inseguridad para quien vive allí.
 - Los datos de seguridad no son puntos exactos. El detalle por dirección se pide a la Policía Nacional

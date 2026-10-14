@@ -27,6 +27,7 @@ services:
       ARRIENDO_WEB_URL: ${ARRIENDO_WEB_URL:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      VISION_URL: http://vision:8001
     volumes:
       - ./config:/config:ro
     ports:
@@ -39,6 +40,19 @@ services:
       resources:
         limits:
           memory: 512M
+
+  vision:
+    build: ./vision
+    environment:
+      VISION_HILOS: "3"
+    volumes:
+      - ./config:/config:ro
+      - vision-modelos:/modelos
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
   fredy:
     # fredy/build.sh prepara este directorio: Fredy fijado a un commit + el portal Fincaraíz.
@@ -87,3 +101,4 @@ volumes:
   pgdata:
   fredy-conf:
   fredy-db:
+  vision-modelos:

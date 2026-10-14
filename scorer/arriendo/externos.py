@@ -65,6 +65,21 @@ def siniestros_cerca(lat: float, lon: float, metros: int = 150) -> int | None:
     return (d or {}).get("count")
 
 
+VISION_URL = os.environ.get("VISION_URL", "")
+
+
+def vision(ruta: str, cuerpo: dict, timeout: float = 600) -> dict | None:
+    if not VISION_URL:
+        return None
+    try:
+        r = httpx.post(f"{VISION_URL}{ruta}", json=cuerpo, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("El servicio de visión no respondió: %s", e)
+        return None
+
+
 def telegram(texto: str, foto: str | None = None) -> bool:
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
