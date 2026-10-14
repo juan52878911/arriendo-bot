@@ -22,6 +22,8 @@ log = logging.getLogger("scorer")
 TOKEN = os.environ.get("ARRIENDO_TOKEN", "")
 WEB_URL = os.environ.get("ARRIENDO_WEB_URL", "")
 BASE_FINCARAIZ = "https://www.fincaraiz.com.co"
+BASE_METROCUADRADO = "https://www.metrocuadrado.com"
+BASE_CIENCUADRAS = "https://www.ciencuadras.com"
 BOGOTA_BBOX = (-74.45, 4.45, -73.95, 4.85)
 
 pendientes: "queue.Queue[str]" = queue.Queue()
@@ -77,6 +79,82 @@ def desde_fincaraiz(rec: dict) -> dict:
     }
 
 
+def _num(valor) -> float | None:
+    try:
+        n = float(str(valor).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _punto(lat, lon) -> tuple:
+    dentro = isinstance(lat, (int, float)) and isinstance(lon, (int, float)) \
+        and BOGOTA_BBOX[0] < lon < BOGOTA_BBOX[2] and BOGOTA_BBOX[1] < lat < BOGOTA_BBOX[3]
+    return (lat, lon) if dentro else (None, None)
+
+
+def desde_metrocuadrado(rec: dict) -> dict:
+    canon = _num(rec.get("mvalorarriendo"))
+    admin = _num((rec.get("data") or {}).get("mvaloradministracion"))
+    # "ascensor:S" → "ascensor"; "tipoEstufa:Gas" → "tipoEstufa Gas" (así "gas" cuenta para la cocina).
+    rasgos = []
+    for item in rec.get("featured") or []:
+        clave, _, valor = str(item).strip().partition(":")
+        if valor == "S":
+            rasgos.append(clave)
+        elif valor and valor not in ("N", "No tiene", "Otro") and not clave.startswith("nro") and not clave.startswith("area"):
+            rasgos.append(f"{clave} {valor}")
+    lat, lon = _punto(*((rec.get("localizacion") or {}).get(k) for k in ("lat", "lon")))
+    ident = rec["midinmueble"]
+    return {
+        "id": f"metrocuadrado:{ident}", "portal": "metrocuadrado",
+        "url": BASE_METROCUADRADO + rec.get("link", ""), "titulo": rec.get("title"),
+        "descripcion": rec.get("comment"), "canon": canon, "total": canon + (admin or 0) if canon else None,
+        "administracion": admin,
+        "area": _num(rec.get("areaprivada")) or _num(rec.get("marea")) or _num(rec.get("mareac")),
+        "habitaciones": int(_num(rec.get("mnrocuartos")) or 0) or None,
+        "banos": int(_num(rec.get("mnrobanos")) or 0) or None,
+        "estrato": rec.get("estrato"), "piso": None,
+        "parqueaderos": int(_num(rec.get("mnrogarajes")) or 0),
+        "facilidades": rasgos,
+        "imagenes": [f"https://multimedia.metrocuadrado.com/{ident}/{g}_p.jpg"
+                     for g in rec.get("mgaleriainmueble") or []][:20],
+        "publicado": None, "lat": lat, "lon": lon,
+        "barrio_portal": rec.get("mnombrecomunbarrio") or rec.get("mbarrio"),
+        "crudo": json.dumps(rec, ensure_ascii=False),
+    }
+
+
+def desde_ciencuadras(rec: dict) -> dict:
+    canon = _num(rec.get("rentPrice"))
+    admin = _num(rec.get("adminValue"))
+    coords = rec.get("coordinates") or {}
+    lat, lon = _punto(coords.get("latitude"), coords.get("longitude"))
+    rasgos = [nombre for campo, nombre in (("gym", "gimnasio"), ("communalPool", "piscina comunal"),
+                                            ("ascended", "ascensor")) if rec.get(campo) in (True, 1, "1")]
+    return {
+        "id": f"ciencuadras:{rec['id']}", "portal": "ciencuadras",
+        "url": BASE_CIENCUADRAS + rec.get("url", ""),
+        "titulo": f"Apartamento en arriendo en {rec.get('neighborhood') or rec.get('locality') or 'Bogotá'}",
+        "descripcion": None, "canon": canon, "total": canon + (admin or 0) if canon else None,
+        "administracion": admin, "area": _num(rec.get("privateArea")) or _num(rec.get("area")),
+        "habitaciones": int(_num(rec.get("rooms")) or 0) or None,
+        "banos": int(_num(rec.get("baths")) or 0) or None,
+        "estrato": int(_num(rec.get("stratum")) or 0) or None, "piso": None,
+        "parqueaderos": int(_num(rec.get("garages")) or 0),
+        "facilidades": rasgos, "imagenes": [rec["image"]] if rec.get("image") else [],
+        "publicado": (rec.get("createdAt") or "")[:10] or None, "lat": lat, "lon": lon,
+        "barrio_portal": rec.get("neighborhood"), "crudo": json.dumps(rec, ensure_ascii=False),
+    }
+
+
+LECTORES = {
+    "fincaraiz": (desde_fincaraiz, "id"),
+    "metrocuadrado": (desde_metrocuadrado, "midinmueble"),
+    "ciencuadras": (desde_ciencuadras, "id"),
+}
+
+
 def guardar(conn, f: dict) -> bool:
     """Inserta o actualiza. Devuelve True si hay que (re)puntuar: es nuevo o cambió el precio."""
     previo = conn.execute("SELECT total FROM inmueble WHERE id = %s", (f["id"],)).fetchone()
@@ -106,14 +184,15 @@ def guardar(conn, f: dict) -> bool:
 
 @app.post("/raw", dependencies=[Depends(autorizado)])
 def raw(cuerpo: dict) -> dict:
-    if cuerpo.get("portal") != "fincaraiz":
+    if cuerpo.get("portal") not in LECTORES:
         raise HTTPException(status_code=400, detail="portal no soportado")
+    lector, clave = LECTORES[cuerpo["portal"]]
     nuevos = 0
     with db.connect() as conn:
         for rec in cuerpo.get("records") or []:
-            if rec.get("id") is None:
+            if rec.get(clave) is None:
                 continue
-            f = desde_fincaraiz(rec)
+            f = lector(rec)
             if guardar(conn, f):
                 pendientes.put(f["id"])
                 nuevos += 1
@@ -125,10 +204,8 @@ def webhook(cuerpo: dict) -> dict:
     """Aviso HTTP de Fredy: solo se guarda el enlace a la ficha en Fredy."""
     with db.connect() as conn:
         for l in cuerpo.get("listings") or []:
-            ident = str(l.get("url") or "").rstrip("/").rsplit("/", 1)[-1]
-            if ident.isdigit() and l.get("fredyUrl"):
-                conn.execute("UPDATE inmueble SET fredy_url = %s WHERE id = %s",
-                             (l["fredyUrl"], f"fincaraiz:{ident}"))
+            if l.get("url") and l.get("fredyUrl"):
+                conn.execute("UPDATE inmueble SET fredy_url = %s WHERE url = %s", (l["fredyUrl"], l["url"]))
     return {"ok": True}
 
 
@@ -152,6 +229,21 @@ def contexto(conn, i: dict, cfg: dict) -> dict:
                         FROM estacion_tm ORDER BY geom <-> %(g)s::geometry LIMIT 1""", {"g": i["geom"]}).fetchone()
     if t:
         ctx.update(tm_m=t["m"], tm_nombre=t["nombre"])
+    v = conn.execute("""SELECT nombre, tipo, ST_Distance(geom::geography, %(g)s::geometry::geography) AS m
+                        FROM via ORDER BY geom <-> %(g)s::geometry LIMIT 1""", {"g": i["geom"]}).fetchone()
+    if v:
+        ctx.update(via_m=v["m"], via_nombre=v["nombre"] or v["tipo"])
+    pq = conn.execute("""SELECT nombre, area_m2, ST_Distance(geom::geography, %(g)s::geometry::geography) AS m
+                         FROM parque WHERE area_m2 >= %(min)s ORDER BY geom <-> %(g)s::geometry LIMIT 1""",
+                      {"g": i["geom"], "min": cfg["parametros"]["parque_min_m2"]}).fetchone()
+    if pq:
+        ctx.update(parque_m=pq["m"], parque_nombre=pq["nombre"] or "parque sin nombre")
+    ctx["mercados"] = conn.execute("""SELECT count(*) AS n FROM poi
+                                      WHERE ST_DWithin(geom::geography, %s::geometry::geography, %s)""",
+                                   (i["geom"], cfg["parametros"]["mercado_radio_m"])).fetchone()["n"]
+    ctx["ciclorruta_m"] = (conn.execute("""SELECT ST_Distance(geom::geography, %(g)s::geometry::geography) AS m
+                                           FROM ciclorruta ORDER BY geom <-> %(g)s::geometry LIMIT 1""",
+                                        {"g": i["geom"]}).fetchone() or {}).get("m")
     minimo = cfg["parametros"]["muestra_min_precio"]
     if not i["area"]:
         return ctx
@@ -170,6 +262,23 @@ def contexto(conn, i: dict, cfg: dict) -> dict:
     return ctx
 
 
+def duplicado(conn, i: dict) -> str | None:
+    """El mismo apartamento publicado en otro portal: a menos de 80 m, mismas habitaciones, área y
+    precio a menos de un 10 %. Devuelve el que se vio primero."""
+    if i["geom"] is None or not i["habitaciones"] or not i["area"] or not i["total"]:
+        return None
+    otro = conn.execute("""
+        SELECT id FROM inmueble
+        WHERE portal <> %(portal)s AND habitaciones = %(hab)s
+          AND abs(area - %(area)s) <= 0.1 * %(area)s AND abs(total - %(total)s) <= 0.1 * %(total)s
+          AND ST_DWithin(geom::geography, %(geom)s::geometry::geography, 80)
+          AND visto_primero <= %(visto)s
+        ORDER BY visto_primero LIMIT 1""",
+        {"portal": i["portal"], "hab": i["habitaciones"], "area": i["area"], "total": i["total"],
+         "geom": i["geom"], "visto": i["visto_primero"]}).fetchone()
+    return otro["id"] if otro else None
+
+
 def puntuar(id_: str) -> None:
     cfg = db.config()
     with db.connect() as conn:
@@ -178,25 +287,38 @@ def puntuar(id_: str) -> None:
         if i is None:
             return
         ctx = contexto(conn, i, cfg)
+        i["duplicado_de"] = duplicado(conn, i)
         r = evaluar(i, ctx, cfg)
-        # Transitous solo para los que sobreviven a los filtros baratos: una consulta por candidato.
-        if not r["descartes"] and i["lat"] is not None and i["tiempo_min"] is None:
-            minutos = externos.minutos_a_destino(i["lat"], i["lon"])
-            if minutos is not None:
-                i["tiempo_min"], i["tiempo_fuente"] = minutos, "transitous"
-                r = evaluar(i, ctx, cfg)
-            time.sleep(1)
+        # Consultas externas solo para los que sobreviven a los filtros baratos, una vez por inmueble.
+        if not r["descartes"] and i["lat"] is not None:
+            if i["tiempo_min"] is None:
+                minutos = externos.minutos_a_destino(i["lat"], i["lon"])
+                if minutos is not None:
+                    i["tiempo_min"], i["tiempo_fuente"] = minutos, "transitous"
+                time.sleep(1)
+            ext = i["externos"] or {}
+            if "suelo_m2" not in ext:
+                ext = {"suelo_m2": externos.valor_suelo_m2(i["lat"], i["lon"]),
+                       "siniestros_150m": externos.siniestros_cerca(i["lat"], i["lon"])}
+                conn.execute("UPDATE inmueble SET externos = %s WHERE id = %s", (json.dumps(ext), id_))
+                i["externos"] = ext
+            ctx.update(ext)
+            r = evaluar(i, ctx, cfg)
         conn.execute("""UPDATE inmueble SET sector = %s, localidad = %s, tm_m = %s, tiempo_min = %s,
-                          tiempo_fuente = %s, puntaje = %s, detalle = %s, descartes = %s, alertas = %s
+                          tiempo_fuente = %s, puntaje = %s, detalle = %s, descartes = %s, alertas = %s,
+                          duplicado_de = %s
                         WHERE id = %s""",
                      (ctx.get("sector"), ctx.get("localidad"), ctx.get("tm_m"), i["tiempo_min"],
                       i["tiempo_fuente"], r["puntaje"], json.dumps(r["detalle"], ensure_ascii=False),
-                      r["descartes"], r["alertas"], id_))
+                      r["descartes"], r["alertas"], i["duplicado_de"], id_))
         avisar(conn, i, ctx, r, cfg)
 
 
 def avisar(conn, i: dict, ctx: dict, r: dict, cfg: dict) -> None:
     if r["descartes"] or r["puntaje"] < cfg["avisos"]["umbral"]:
+        return
+    if i.get("duplicado_de"):
+        # Ya se avisó (o se avisará) por el portal donde apareció primero.
         return
     if i["avisado"] is not None:
         previos = conn.execute("SELECT total FROM precio WHERE inmueble = %s ORDER BY visto DESC LIMIT 2",
@@ -260,10 +382,11 @@ def recalcular() -> dict:
 
 @app.get("/api/inmuebles")
 def inmuebles(todos: bool = False, limite: int = 300) -> list[dict]:
-    filtro = "" if todos else "WHERE coalesce(cardinality(descartes), 0) = 0 AND puntaje IS NOT NULL"
+    filtro = "" if todos else ("WHERE coalesce(cardinality(descartes), 0) = 0 AND puntaje IS NOT NULL"
+                               " AND duplicado_de IS NULL")
     with db.connect() as conn:
         return conn.execute(f"""
-            SELECT id, url, fredy_url, titulo, total, area, habitaciones, banos, estrato, puntaje, detalle,
+            SELECT id, portal, duplicado_de, url, fredy_url, titulo, total, area, habitaciones, banos, estrato, puntaje, detalle,
                    descartes, alertas, tiempo_min, tiempo_fuente, barrio_portal, localidad,
                    (SELECT nombre FROM sector s WHERE s.codigo = i.sector) AS sector_nombre,
                    imagenes[1] AS foto, publicado, visto_primero, ST_Y(geom) AS lat, ST_X(geom) AS lon

@@ -32,3 +32,17 @@
   url: https://gis.transmilenio.gov.co/arcgis/rest/services/Troncal/consulta_estaciones_troncales/MapServer/0
   tabla: estacion_tm
   frecuencia_dias: 90
+
+- id: osm
+  descripcion: Vías principales, parques, supermercados y plazas de mercado, ciclorrutas
+  entidad: OpenStreetMap (ODbL) vía Overpass
+  tipo: overpass
+  url: https://overpass-api.de/api/interpreter
+  tabla: via, parque, poi, ciclorruta
+  frecuencia_dias: 30
+
+# Consultas por inmueble (no se descargan enteras; solo para candidatos que pasan los filtros):
+# - Valor de referencia del suelo por manzana, Catastro Bogotá (2026):
+#   https://serviciosgis.catastrobogota.gov.co/arcgis/rest/services/catastro/valorreferencia/MapServer/0
+# - Siniestros viales históricos 2015-2021, Secretaría de Movilidad:
+#   https://services2.arcgis.com/NEwhEo9GGSHXcRXV/arcgis/rest/services/HistoricoSiniestros/FeatureServer/0

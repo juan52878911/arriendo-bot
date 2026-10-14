@@ -116,6 +116,32 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
     else:
         poner("transporte", 0.5, "sin datos de estaciones")
 
+    if contexto.get("via_m") is not None:
+        via = contexto["via_m"]
+        poner("aire_ruido", _lineal(via, par["via_cerca_m"], par["via_lejos_m"]),
+              f"{via:.0f} m a {contexto.get('via_nombre') or 'una vía principal'}")
+        if via < par["via_encima_m"]:
+            alertas.append(f"Parece estar sobre {contexto.get('via_nombre') or 'una vía principal'} "
+                           f"({via:.0f} m): revisa ruido y aire en la visita")
+    else:
+        poner("aire_ruido", 0.5, "sin datos de vías")
+
+    partes, notas = [], []
+    if contexto.get("parque_m") is not None:
+        partes.append(_lineal(contexto["parque_m"], par["parque_lejos_m"], par["parque_cerca_m"]))
+        notas.append(f"{contexto['parque_m']:.0f} m a {contexto.get('parque_nombre')}")
+    if contexto.get("mercados") is not None:
+        partes.append(min(1.0, contexto["mercados"] / 2))
+        notas.append(f"{contexto['mercados']} supermercados o plazas a {par['mercado_radio_m']} m")
+    if contexto.get("ciclorruta_m") is not None and contexto["ciclorruta_m"] < 300:
+        notas.append(f"ciclorruta a {contexto['ciclorruta_m']:.0f} m")
+    poner("entorno", sum(partes) / len(partes) if partes else 0.5, ", ".join(notas) or "sin datos del entorno")
+
+    if contexto.get("siniestros_150m") and contexto["siniestros_150m"] >= par["siniestros_alerta"]:
+        alertas.append(f"{contexto['siniestros_150m']} siniestros viales a menos de 150 m (2015-2021)")
+    if contexto.get("suelo_m2") and detalle.get("precio_m2"):
+        detalle["precio_m2"]["nota"] += f"; suelo de la manzana ${contexto['suelo_m2']:,.0f}/m² (Catastro)".replace(",", ".")
+
     luz = _palabras(texto, cfg["palabras"]["luz"])
     if (i.get("piso") or 0) >= 4:
         luz.append(f"piso {i['piso']}")

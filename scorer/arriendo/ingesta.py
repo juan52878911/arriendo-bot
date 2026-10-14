@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import sys
+import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -147,8 +148,80 @@ def cargar_estaciones(fuente: dict, conn) -> int:
     return n
 
 
+# Servidores públicos de Overpass; si uno está saturado se prueba el siguiente.
+OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter",
+            "https://overpass.private.coffee/api/interpreter"]
+BBOX = "4.47,-74.23,4.84,-73.99"  # Bogotá urbana (sur, oeste, norte, este)
+
+
+def overpass(consulta: str) -> list[dict]:
+    ultimo = None
+    for intento, servidor in enumerate(OVERPASS * 2):
+        try:
+            r = HTTP.post(servidor, data={"data": f"[out:json][timeout:180][bbox:{BBOX}];{consulta}"}, timeout=240)
+            r.raise_for_status()
+            return r.json()["elements"]
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            ultimo = e
+            log.warning("Overpass %s falló (%s); pruebo otro", servidor, e)
+            time.sleep(10 * (intento + 1))
+    raise RuntimeError(f"Ningún servidor de Overpass respondió: {ultimo}")
+
+
+def _linea(puntos: list[dict]) -> str:
+    return json.dumps({"type": "LineString", "coordinates": [[p["lon"], p["lat"]] for p in puntos]})
+
+
+def cargar_osm(fuente: dict, conn) -> int:
+    n = 0
+    # Vías principales: lo que hace ruido y empeora el aire.
+    for e in overpass('way[highway~"^(motorway|trunk|primary)$"];out geom;'):
+        if len(e.get("geometry") or []) < 2:
+            continue
+        conn.execute("""INSERT INTO via (id, tipo, nombre, geom) VALUES (%s, %s, %s, ST_GeomFromGeoJSON(%s))
+                        ON CONFLICT (id) DO UPDATE SET tipo = EXCLUDED.tipo, nombre = EXCLUDED.nombre, geom = EXCLUDED.geom""",
+                     (f"w{e['id']}", e["tags"].get("highway"), e["tags"].get("name"), _linea(e["geometry"])))
+        n += 1
+    # Parques: vías cerradas y relaciones multipolígono, armadas en PostGIS con ST_BuildArea.
+    for e in overpass('(way[leisure=park];relation[leisure=park];);out geom;'):
+        if e["type"] == "way":
+            lineas = [e.get("geometry") or []]
+        else:
+            lineas = [m.get("geometry") or [] for m in e.get("members", []) if m.get("role") in ("outer", "")]
+        lineas = [l for l in lineas if len(l) >= 2]
+        if not lineas:
+            continue
+        multi = json.dumps({"type": "MultiLineString",
+                            "coordinates": [[[p["lon"], p["lat"]] for p in l] for l in lineas]})
+        conn.execute("""
+            WITH g AS (SELECT ST_Multi(ST_CollectionExtract(ST_BuildArea(ST_SetSRID(ST_GeomFromGeoJSON(%(m)s), 4326)), 3)) AS geom)
+            INSERT INTO parque (id, nombre, area_m2, geom)
+            SELECT %(id)s, %(nombre)s, ST_Area(geom::geography), geom FROM g WHERE NOT ST_IsEmpty(geom)
+            ON CONFLICT (id) DO UPDATE SET nombre = EXCLUDED.nombre, area_m2 = EXCLUDED.area_m2, geom = EXCLUDED.geom""",
+                     {"m": multi, "id": f"{e['type'][0]}{e['id']}", "nombre": e.get("tags", {}).get("name")})
+        n += 1
+    # Supermercados y plazas de mercado: para alguien que va a estudiar cocina.
+    for e in overpass('(nwr[shop=supermarket];nwr[amenity=marketplace];);out center;'):
+        lat, lon = (e["lat"], e["lon"]) if e["type"] == "node" else (e.get("center", {}).get("lat"), e.get("center", {}).get("lon"))
+        if lat is None:
+            continue
+        tipo = "plaza_mercado" if e["tags"].get("amenity") == "marketplace" else "supermercado"
+        conn.execute("""INSERT INTO poi (id, tipo, nombre, geom) VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+                        ON CONFLICT (id) DO UPDATE SET tipo = EXCLUDED.tipo, nombre = EXCLUDED.nombre, geom = EXCLUDED.geom""",
+                     (f"{e['type'][0]}{e['id']}", tipo, e["tags"].get("name"), lon, lat))
+        n += 1
+    # Ciclorrutas.
+    for e in overpass('(way[highway=cycleway];way[cycleway~"^(track|lane)$"];);out geom;'):
+        if len(e.get("geometry") or []) < 2:
+            continue
+        conn.execute("""INSERT INTO ciclorruta (id, geom) VALUES (%s, ST_GeomFromGeoJSON(%s))
+                        ON CONFLICT (id) DO UPDATE SET geom = EXCLUDED.geom""", (f"w{e['id']}", _linea(e["geometry"])))
+        n += 1
+    return n
+
+
 LECTORES = {"seguridad_sector": cargar_sector, "delitos_localidad": cargar_localidad,
-            "estratos": cargar_estratos, "estaciones_tm": cargar_estaciones}
+            "estratos": cargar_estratos, "estaciones_tm": cargar_estaciones, "osm": cargar_osm}
 
 
 def run(forzar: bool = False) -> None:

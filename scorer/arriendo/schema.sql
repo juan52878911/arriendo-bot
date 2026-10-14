@@ -35,6 +35,37 @@ CREATE TABLE IF NOT EXISTS estacion_tm (
 );
 CREATE INDEX IF NOT EXISTS estacion_tm_geom ON estacion_tm USING gist (geom);
 
+-- OpenStreetMap: vías principales, parques, mercados y ciclorrutas.
+CREATE TABLE IF NOT EXISTS via (
+  id      text PRIMARY KEY,
+  tipo    text,                              -- motorway | trunk | primary
+  nombre  text,
+  geom    geometry(LineString, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS via_geom ON via USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS parque (
+  id       text PRIMARY KEY,
+  nombre   text,
+  area_m2  real,
+  geom     geometry(MultiPolygon, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS parque_geom ON parque USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS poi (
+  id      text PRIMARY KEY,
+  tipo    text,                              -- supermercado | plaza_mercado
+  nombre  text,
+  geom    geometry(Point, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS poi_geom ON poi USING gist (geom);
+
+CREATE TABLE IF NOT EXISTS ciclorruta (
+  id    text PRIMARY KEY,
+  geom  geometry(LineString, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ciclorruta_geom ON ciclorruta USING gist (geom);
+
 CREATE TABLE IF NOT EXISTS fuente (
   id            text PRIMARY KEY,
   actualizada   timestamptz NOT NULL,
@@ -81,6 +112,9 @@ CREATE TABLE IF NOT EXISTS inmueble (
 );
 CREATE INDEX IF NOT EXISTS inmueble_geom ON inmueble USING gist (geom);
 CREATE INDEX IF NOT EXISTS inmueble_puntaje ON inmueble (puntaje DESC);
+
+ALTER TABLE inmueble ADD COLUMN IF NOT EXISTS duplicado_de text;
+ALTER TABLE inmueble ADD COLUMN IF NOT EXISTS externos jsonb;   -- consultas por inmueble: suelo, siniestros
 
 -- Historial de precios: lo que después se lleva a chrono.
 CREATE TABLE IF NOT EXISTS precio (

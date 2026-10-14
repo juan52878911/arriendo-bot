@@ -12,8 +12,15 @@ import { upsertChannel } from './lib/services/storage/configuredAdapterStorage.j
 import { upsertJob } from './lib/services/storage/jobStorage.js';
 import { upsertSettings } from './lib/services/storage/settingsStorage.js';
 
-// 3 o más habitaciones, hasta $3.000.000 y los más recientes primero, para que una página baste.
-const FILTRO = '3-o-mas-habitaciones/hasta-3000000?ordenListado=3';
+// Una URL por portal y barrio. Cada portal filtra distinto:
+// - Fincaraíz: 3+ habitaciones, hasta $3.000.000 y más recientes primero, todo en la URL.
+// - Metrocuadrado: 3 habitaciones en la ruta; ordena por relevancia y trae hasta 50.
+// - Ciencuadras: solo el barrio (el servidor ignora los filtros); trae los 20 más recientes.
+// null = el portal no reconoce ese barrio (lo comprobamos el 2026-10-14).
+const fincaraiz = (slug) => `https://www.fincaraiz.com.co/arriendo/apartamentos/${slug}/bogota/3-o-mas-habitaciones/hasta-3000000?ordenListado=3`;
+const metrocuadrado = (slug) => `https://www.metrocuadrado.com/apartamentos/arriendo/bogota/${slug}/3-habitaciones/`;
+const ciencuadras = (slug) => `https://www.ciencuadras.com/arriendo/apartamento/bogota/${slug}`;
+
 const BARRIOS = [];
 
 await SqliteConnection.init();
@@ -32,19 +39,19 @@ const canal = upsertChannel({
   },
 });
 
-for (const [nombre, slug] of BARRIOS) {
+for (const [nombre, fc, m2, cc] of BARRIOS) {
+  const provider = [
+    fc && { id: 'fincaraiz', name: 'Fincaraíz', url: fincaraiz(fc), enabled: true },
+    m2 && { id: 'metrocuadrado', name: 'Metrocuadrado', url: metrocuadrado(m2), enabled: true },
+    cc && { id: 'ciencuadras', name: 'Ciencuadras', url: ciencuadras(cc), enabled: true },
+  ].filter(Boolean);
   upsertJob({
-    jobId: `arriendo-${slug.split('/')[0]}`,
+    jobId: `arriendo-${fc.split('/')[0]}`,
     name: `Arriendo · ${nombre}`,
     userId: admin.id,
     enabled: true,
     dealType: 'rent',
-    provider: [{
-      id: 'fincaraiz',
-      name: 'Fincaraíz',
-      url: `https://www.fincaraiz.com.co/arriendo/apartamentos/${slug}/bogota/${FILTRO}`,
-      enabled: true,
-    }],
+    provider,
     notificationAdapter: [{ configuredAdapterId: canal }],
   });
 }

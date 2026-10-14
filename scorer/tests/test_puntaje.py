@@ -66,3 +66,36 @@ def test_variantes_de_una_palabra_cuentan_una_vez():
 def test_estudio_genera_alerta():
     r = evaluar(base(descripcion="3 alcobas, una es estudio"), {}, CFG)
     assert any("habitación" in a for a in r["alertas"])
+
+
+def test_mapea_metrocuadrado():
+    from arriendo.app import desde_metrocuadrado
+    rec = json.loads((AQUI / "metrocuadrado_muestra.json").read_text())[0]
+    f = desde_metrocuadrado(rec)
+    assert f["id"] == f"metrocuadrado:{rec['midinmueble']}"
+    assert f["total"] == rec["mvalorarriendo"] + int(rec["data"]["mvaloradministracion"])
+    assert f["lat"] and f["habitaciones"] == 1 and f["estrato"] == 4
+    assert "ascensor" in f["facilidades"] and "tipoEstufa Gas" in f["facilidades"]
+    assert f["imagenes"][0].startswith("https://multimedia.metrocuadrado.com/")
+
+
+def test_mapea_ciencuadras():
+    from arriendo.app import desde_ciencuadras
+    rec = json.loads((AQUI / "ciencuadras_muestra.json").read_text())[0]
+    f = desde_ciencuadras(rec)
+    assert f["id"] == f"ciencuadras:{rec['id']}"
+    assert f["total"] == rec["rentPrice"] + rec["adminValue"]
+    assert f["area"] == 45.0 and f["habitaciones"] == 2 and f["estrato"] == 3
+    assert f["publicado"] == rec["createdAt"][:10] and f["lat"]
+
+
+def test_avenida_cerca_alerta_y_baja_aire_ruido():
+    r = evaluar(base(), {"via_m": 15, "via_nombre": "Avenida Carrera 30"}, CFG)
+    assert r["detalle"]["aire_ruido"]["valor"] == 0
+    assert any("Avenida Carrera 30" in a for a in r["alertas"])
+    lejos = evaluar(base(), {"via_m": 400, "parque_m": 200, "parque_nombre": "Parque", "mercados": 3}, CFG)
+    assert lejos["detalle"]["aire_ruido"]["valor"] == 1 and lejos["detalle"]["entorno"]["valor"] == 1
+
+
+def test_pesos_suman_100():
+    assert sum(CFG["pesos"].values()) == 100
