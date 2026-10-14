@@ -153,12 +153,17 @@ def contexto(conn, i: dict, cfg: dict) -> dict:
     if t:
         ctx.update(tm_m=t["m"], tm_nombre=t["nombre"])
     minimo = cfg["parametros"]["muestra_min_precio"]
+    if not i["area"]:
+        return ctx
     for campo, valor in (("sector", ctx.get("sector")), ("localidad", ctx.get("localidad"))):
         if not valor:
             continue
+        # Solo inmuebles de tamaño parecido: un apartaestudio cuesta mucho más por m² que un
+        # apartamento familiar, y mezclarlos hace parecer sospechoso cualquier precio normal.
         m = conn.execute(f"""SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY total / area) AS med, count(*) AS n
-                             FROM inmueble WHERE {campo} = %s AND id <> %s AND area > 20 AND total > 0""",
-                         (valor, i["id"])).fetchone()
+                             FROM inmueble WHERE {campo} = %s AND id <> %s AND total > 0
+                               AND area BETWEEN %s * 0.6 AND %s * 1.6""",
+                         (valor, i["id"], i["area"], i["area"])).fetchone()
         if m and m["n"] >= minimo:
             ctx.update(mediana_m2=m["med"], mediana_n=m["n"])
             break

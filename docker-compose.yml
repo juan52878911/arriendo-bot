@@ -46,7 +46,8 @@ services:
     environment:
       ARRIENDO_RAW_URL: http://scorer:8000/raw
       ARRIENDO_TOKEN: ${ARRIENDO_TOKEN}
-      FINCARAIZ_MAX_PAGES: ${FINCARAIZ_MAX_PAGES:-3}
+      FINCARAIZ_MAX_PAGES: ${FINCARAIZ_MAX_PAGES:-2}
+      FREDY_BASE_URL: ${FREDY_BASE_URL:-http://IP-DEL-SERVIDOR:9998}
       TZ: America/Bogota
     # Disco local, no el NAS: SQLite sobre NFS corrompe con los bloqueos de WAL.
     volumes:

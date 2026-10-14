@@ -42,8 +42,9 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const mapa = L.map('mapa').setView([4.65, -74.08], 12);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-  { attribution: '© OpenStreetMap, © CARTO', maxZoom: 19 }).addTo(mapa);
+// Mosaicos de OpenStreetMap: sin clave. Su política pide atribución visible y uso moderado.
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom: 19 }).addTo(mapa);
 L.marker([4.5981, -74.0760], { title: 'destino' }).addTo(mapa).bindTooltip('destino');
 
 const peso = n => '$' + Math.round(n).toLocaleString('es-CO');
