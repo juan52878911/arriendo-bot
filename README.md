@@ -26,12 +26,18 @@ sh fredy/build.sh           # descarga Fredy fijado y le añade Fincaraíz
 docker compose up -d --build
 ```
 
-Luego, en Fredy (`http://<servidor>:9998`, usuario `admin` / `admin`; **cámbialo**):
+Luego se configura Fredy sin tocar su interfaz: canal HTTP hacia el scorer, un job por barrio
+(3+ habitaciones, hasta $3.000.000, más recientes primero), pasada cada 60 minutos y sin telemetría.
+Para cambiar barrios, edita la lista de `fredy/configurar.mjs` y vuelve a correrlo:
 
-1. **Canal de notificación** → tipo *HTTP*: `http://scorer:8000/webhook`, token = `ARRIENDO_TOKEN`.
-2. **Un job por barrio** con el portal Fincaraíz y la URL de búsqueda copiada del navegador, por
-   ejemplo `https://www.fincaraiz.com.co/arriendo/apartamentos/alcazares/zona-noroccidente/bogota`.
-   Intervalo recomendado: 60 minutos.
+```bash
+docker compose cp fredy/configurar.mjs fredy:/fredy/configurar.mjs
+docker compose exec -w /fredy fredy node configurar.mjs
+docker compose restart fredy
+```
+
+La interfaz de Fredy (`http://<servidor>:9998`) arranca con `admin` / `admin`: cámbiala en
+*Usuarios* la primera vez que entres.
 
 ## Telegram
 
