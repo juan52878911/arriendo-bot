@@ -191,3 +191,28 @@ CREATE TABLE IF NOT EXISTS etiqueta_img (
   creada  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (huella, cabeza)
 );
+
+-- Métricas diarias (una foto por día) y experimentos activados, para medir si un cambio mejoró algo.
+CREATE TABLE IF NOT EXISTS metrica (
+  dia     date NOT NULL,
+  nombre  text NOT NULL,
+  clave   text NOT NULL DEFAULT '',
+  valor   real NOT NULL,
+  PRIMARY KEY (dia, nombre, clave)
+);
+
+CREATE TABLE IF NOT EXISTS experimento (
+  nombre    text PRIMARY KEY,
+  activado  timestamptz NOT NULL DEFAULT now(),
+  detalle   jsonb
+);
+
+-- Anuncios cuyo texto es casi idéntico al de otro (chrono similar): republicaciones o plantillas de estafa.
+CREATE TABLE IF NOT EXISTS sospecha (
+  inmueble   text NOT NULL REFERENCES inmueble (id) ON DELETE CASCADE,
+  parecido   text NOT NULL REFERENCES inmueble (id) ON DELETE CASCADE,
+  distancia  int,                            -- bits de diferencia entre SimHash (0 = idénticos)
+  motivo     text,
+  creada     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (inmueble, parecido)
+);

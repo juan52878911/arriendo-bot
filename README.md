@@ -114,16 +114,30 @@ Con unas 20-30 por clase, **Entrenar** ajusta una regresión logística por cabe
 acierta más que el zero-shot en validación cruzada; luego reclasifica todas las fotos guardadas y
 repuntúa, sin volver a descargarlas.
 
-## Historial con chrono
+## chrono: la memoria del servicio
 
-El servidor lo indexa cada día (`servidor/chrono-sync.sh`, índice en el NAS `/data/chrono`):
+`servidor/analisis_chrono.py` corre cada hora en el LXC y usa [chrono](https://github.com/juan52878911/chrono)
+sobre cuatro fuentes en el NAS (`/data/chrono`): el historial del mercado (publicado, nuevo,
+bajadas y subidas, retirado; por barrio, con portal, precio y anunciante), las descripciones de los
+anuncios, los registros de los contenedores y el resultado de las tareas programadas.
+
+| Qué | Cómo | Para qué |
+|---|---|---|
+| Horas pico de publicación | `timeline --level publicado --bucket 1h` | Fredy pasa cada 30 min en esas horas y cada 60 el resto (experimento `horario_adaptativo`) |
+| Días en el mercado por barrio | `stats dias_en_mercado --by entity` | Dónde hay que llamar el mismo día |
+| Demora de detección | `stats demora_min --by attr:portal` | Cuánto tarda el sistema en ver un anuncio nuevo |
+| Republicaciones y textos copiados | `similar` (SimHash) | Alerta en el anuncio; además junta duplicados entre portales que la ubicación no veía |
+| Qué precede a un retiro | `precede --level retirado` | Señales de que un anuncio está por irse |
+| Errores del sistema | `patterns`/`top` sobre los registros | Encontró fallos de DNS que hacían perder pasadas (ahora hay reintento) |
+
+Resultados en `http://<servidor>:8000/mercado`, resumen semanal por Telegram los lunes a las 7 a. m.
+Cada día a las 3 a. m. se guarda una foto de las métricas (`metrica`) y cada cambio registra cuándo se
+activó (`experimento`), para comparar antes y después con datos reales. Consultas a mano:
 
 ```bash
-ssh arriendo 'cd /data/chrono && chrono top entity'          # barrios con más movimiento
-ssh arriendo 'cd /data/chrono && chrono events --level baja' # bajadas de precio
+ssh arriendo 'cd /data/chrono && chrono top entity --level nuevo'
+ssh arriendo 'cd /data/chrono && chrono patterns --level ERROR --source jsonl:/data/chrono/logs.jsonl'
 ```
-
-Para tenerlo en tu Mac: `sh chrono/sync.sh`.
 
 ## Uso responsable de los portales
 

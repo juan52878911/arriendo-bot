@@ -43,6 +43,25 @@ const REQUEST_HEADERS = {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
 };
 
+/**
+ * fetch con un reintento a los 5 s si la red falla (no si el portal responde con error). chrono encontró
+ * en los registros fallos de DNS esporádicos (EAI_AGAIN) que hacían perder la pasada entera de un portal.
+ *
+ * @param {string} url
+ * @param {RequestInit} opciones
+ * @returns {Promise<Response>}
+ */
+async function fetchConReintento(url, opciones) {
+  try {
+    return await fetch(url, opciones);
+  } catch (err) {
+    logger.warn(`Red falló en ${url} (${err.cause?.code ?? err.message}); reintento en 5 s`);
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    return fetch(url, opciones);
+  }
+}
+
+
 const NEXT_DATA = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,7 +131,7 @@ async function getListings(url) {
     if (n > 1) {
       await sleep(PAGE_DELAY_MS);
     }
-    const response = await fetch(pageUrl(url, n), { headers: REQUEST_HEADERS });
+    const response = await fetchConReintento(pageUrl(url, n), { headers: REQUEST_HEADERS });
     if (!response.ok) {
       logger.error(`Error fetching Fincaraíz page ${n}: ${response.status} ${response.statusText}`);
       break;

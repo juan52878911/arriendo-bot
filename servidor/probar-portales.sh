@@ -10,6 +10,8 @@ if ! echo "$salida" | grep -q "^# fail 0"; then
   TOKEN=$(grep ^ARRIENDO_TOKEN .env | cut -d= -f2)
   curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d "{\"clave\": \"portales\", \"mensaje\": \"La prueba semanal de portales falló: $fallos\"}" localhost:8000/api/aviso >/dev/null
+  python3 /opt/arriendo-bot/servidor/analisis_chrono.py tarea probar-portales ERROR "$fallos"
   echo "FALLO: $fallos"; exit 1
 fi
+python3 /opt/arriendo-bot/servidor/analisis_chrono.py tarea probar-portales INFO "los tres portales se leen bien"
 echo "Portales OK"

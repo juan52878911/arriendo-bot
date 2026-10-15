@@ -123,3 +123,10 @@ def test_correo_extrae_enlaces_de_anuncios_sin_seguir_terceros():
         "https://www.fincaraiz.com.co/apartamento-en-arriendo-en-marly-bogota/190000001"}
     assert len(correo.enlaces_de_anuncios(texto, "metrocuadrado")) == 1
     assert len(correo.enlaces_de_anuncios(texto, "ciencuadras")) == 1
+
+
+def test_sospecha_de_texto_copiado_alerta_y_republicacion_explica():
+    copia = evaluar(base(), {"sospechas": [{"parecido": "x:1", "motivo": "texto copiado de otro anunciante", "retirado": False}]}, CFG)
+    assert any("anunciante sea real" in a for a in copia["alertas"])
+    repub = evaluar(base(), {"sospechas": [{"parecido": "x:2", "motivo": "republicación del mismo apartamento", "retirado": True}]}, CFG)
+    assert any("se volvió a publicar" in a for a in repub["alertas"])

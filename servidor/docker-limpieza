@@ -3,3 +3,4 @@
 # Va en /etc/cron.weekly/docker-limpieza del LXC.
 docker image prune -f >/dev/null
 docker builder prune -f --filter until=168h >/dev/null
+python3 /opt/arriendo-bot/servidor/analisis_chrono.py tarea docker-limpieza INFO "imágenes y caché viejas borradas; disco $(df -h / | awk 'NR==2{print $5}')"

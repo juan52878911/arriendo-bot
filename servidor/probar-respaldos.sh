@@ -10,6 +10,7 @@ fallo() {
   curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d "{\"clave\": \"respaldos\", \"mensaje\": \"La prueba semanal de respaldos falló: $1\"}" \
     localhost:8000/api/aviso >/dev/null
+  python3 /opt/arriendo-bot/servidor/analisis_chrono.py tarea probar-respaldos ERROR "$1"
   echo "FALLO: $1"
   exit 1
 }
@@ -31,4 +32,5 @@ DB=$(ls -t /data/respaldos/fredy-*.db 2>/dev/null | head -1)
 r=$(docker compose exec -T respaldo-fredy sqlite3 "/respaldos/$(basename "$DB")" "pragma integrity_check; select count(*) from jobs;" 2>&1)
 echo "$r" | head -1 | grep -qx ok || fallo "integridad de $(basename "$DB"): $r"
 [ "$(echo "$r" | tail -1)" -gt 0 ] || fallo "$(basename "$DB") no tiene búsquedas"
+python3 /opt/arriendo-bot/servidor/analisis_chrono.py tarea probar-respaldos INFO "restaurados $(basename "$DUMP") y $(basename "$DB")"
 echo "Respaldos OK: $(basename "$DUMP"), $(basename "$DB")"

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mercado y métricas</title>
+<style>
+  :root { --bg:#f7f6f2; --card:#fff; --text:#22211e; --muted:#6b6962; --line:#e3e1da; --accent:#0f6e56; --warn:#a3562d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1a; --card:#262624; --text:#ecebe6; --muted:#a3a19a; --line:#3a3936; --accent:#5dcaa5; --warn:#f0997b; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:1000px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 4px; font-weight:600; } h2 { font-size:16px; margin:24px 0 8px; font-weight:600; }
+  .muted { color:var(--muted); font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .card h3 { font-size:14px; margin:0 0 6px; font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:3px 6px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-weight:500; }
+  .num { text-align:right; }
+  pre { white-space:pre-wrap; font-size:12px; margin:0; }
+  a { color:var(--accent); }
+  .barra { display:inline-block; height:8px; background:var(--accent); border-radius:2px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mercado y métricas</h1>
+  <p class="muted"><a href="./">← mapa</a> · Lo calcula chrono cada hora sobre el historial del mercado, los registros del sistema y las tareas programadas. Las métricas se guardan una vez al día para comparar antes y después de cada cambio.</p>
+  <div id="contenido">cargando…</div>
+</main>
+<script>
+const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const tabla = (filas, cols) => filas && filas.length
+  ? `<table><tr>${cols.map(c => `<th class="${c[2] || ''}">${c[0]}</th>`).join('')}</tr>${filas.map(f =>
+      `<tr>${cols.map(c => `<td class="${c[2] || ''}">${esc(c[1](f))}</td>`).join('')}</tr>`).join('')}</table>`
+  : '<p class="muted">Todavía sin datos suficientes.</p>';
+const tarjeta = (titulo, cuerpo, nota) => `<div class="card"><h3>${titulo}</h3>${cuerpo}${nota ? `<p class="muted">${nota}</p>` : ''}</div>`;
+const grupos = s => (s && (s.groups || s.stats || s.rows)) || [];
+
+async function cargar() {
+  const m = await (await fetch('api/metricas?dias=60')).json();
+  const a = m.analisis || {};
+  const html = [];
+  html.push('<h2>Lo que dice chrono</h2><div class="grid">');
+  html.push(tarjeta('Horas de más publicaciones', a.horas_pico && a.horas_pico.length
+    ? `<p><b>${a.horas_pico.map(h => h + ':00').join(', ')}</b></p>` : '<p class="muted">Todavía sin datos suficientes.</p>',
+    `${a.publicaciones_con_hora ?? 0} publicaciones con hora exacta (Ciencuadras). Fredy: ${esc(a.horario_fredy?.estado ?? '—')}${a.horario_fredy?.intervalo_ahora ? `, cada ${a.horario_fredy.intervalo_ahora} min ahora` : ''}.`));
+  html.push(tarjeta('Días en el mercado por barrio', tabla(grupos(a.dias_en_mercado_por_barrio),
+    [['barrio', f => f.group ?? f.key ?? f.value], ['mediana', f => (f.p50 ?? f.median ?? 0).toFixed?.(1) ?? f.p50, 'num'], ['n', f => f.count ?? f.n, 'num']]),
+    'Entre que se ve un anuncio y se comprueba que ya no está. Corto = hay que llamar rápido.'));
+  html.push(tarjeta('Demora de detección', tabla(grupos(a.demora_deteccion_min),
+    [['portal', f => f.group ?? f.key ?? f.value], ['mediana (min)', f => Math.round(f.p50 ?? f.median ?? 0), 'num'], ['p95', f => Math.round(f.p95 ?? 0), 'num'], ['n', f => f.count ?? f.n, 'num']]),
+    'Minutos entre que el portal publica y el sistema lo ve (solo donde el portal da la hora).'));
+  html.push(tarjeta('Barrios con más anuncios nuevos (7 días)', tabla(a.barrios_mas_nuevos_7d, [['barrio', f => f.value], ['nuevos', f => f.count, 'num']])));
+  html.push(tarjeta('Bajadas de precio por barrio (30 días)', tabla(a.bajadas_por_barrio_30d, [['barrio', f => f.value], ['bajadas', f => f.count, 'num']])));
+  html.push(tarjeta('Anunciantes más activos (30 días)', tabla(a.anunciantes_mas_activos_30d, [['anunciante', f => f.value], ['nuevos', f => f.count, 'num']])));
+  html.push(tarjeta('Qué precede a un retiro', a.precede_retiro && !a.precede_retiro.error
+    ? `<pre>${esc(JSON.stringify(a.precede_retiro.precursors ?? a.precede_retiro.common_precursors ?? a.precede_retiro, null, 1)).slice(0, 1200)}</pre>`
+    : '<p class="muted">Todavía sin retiros comprobados.</p>'));
+  html.push(tarjeta('Salud del sistema (7 días)', `<p>Errores en registros: <b>${a.errores_logs_7d ?? '—'}</b> · textos parecidos nuevos: ${a.parecidos_nuevos ?? 0}</p>` +
+    tabla(a.tareas_7d, [['tareas', f => f.value], ['n', f => f.count, 'num']])));
+  html.push('</div>');
+
+  html.push('<h2>Métricas diarias</h2>');
+  const nombres = [...new Set(m.serie.map(s => s.nombre))];
+  const dias = [...new Set(m.serie.map(s => s.dia))];
+  html.push(nombres.length ? tabla(nombres.flatMap(n => [...new Set(m.serie.filter(s => s.nombre === n).map(s => s.clave))].map(c => ({ n, c }))),
+    [['métrica', f => f.n + (f.c ? ` · ${f.c}` : '')], ...dias.slice(-10).map(d => [d.slice(5), f => {
+      const v = m.serie.find(s => s.nombre === f.n && s.clave === f.c && s.dia === d); return v ? Math.round(v.valor * 10) / 10 : '';
+    }, 'num'])]) + `<p class="muted">${Object.entries(m.definiciones).map(([k, v]) => `<b>${k}</b>: ${esc(v)}`).join(' · ')}</p>`
+    : '<p class="muted">La primera foto diaria se toma a las 3 a. m.</p>');
+
+  html.push('<h2>Antes y después de cada cambio</h2>');
+  html.push(tabla(m.comparaciones, [['experimento', f => f.experimento], ['activado', f => f.activado.slice(0, 16).replace('T', ' ')],
+    ['métrica', f => f.metrica], ['antes', f => f.antes == null ? '—' : `${f.antes.toFixed(1)} (${f.n_antes} d)`, 'num'],
+    ['después', f => f.despues == null ? '—' : `${f.despues.toFixed(1)} (${f.n_despues} d)`, 'num']]));
+  document.getElementById('contenido').innerHTML = html.join('');
+}
+cargar();
+</script>
+</body>
+</html>

@@ -179,6 +179,14 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
         luz.append(f"piso {i['piso']}")
     poner("luz", min(1.0, len(luz) / 2), ", ".join(luz) or "nada sobre luz o vista")
 
+    for sp in contexto.get("sospechas") or []:
+        if sp.get("motivo", "").startswith("republicación"):
+            alertas.append(f"Es el mismo apartamento que {sp['parecido']}{' (ya retirado)' if sp['retirado'] else ''}: "
+                           "se volvió a publicar, lleva más tiempo en el mercado de lo que parece")
+        else:
+            alertas.append(f"Su texto es idéntico al de otro anunciante ({sp['parecido']}): verifica que el "
+                           "anunciante sea real antes de pagar nada")
+
     total_peso = sum(d["peso"] for d in detalle.values()) or 1
     puntaje = 100 * sum(d["valor"] * d["peso"] for d in detalle.values()) / total_peso
     return {"puntaje": round(puntaje, 1), "detalle": detalle, "descartes": descartes, "alertas": alertas}

@@ -1,0 +1,3 @@
+#!/bin/sh
+# arriendo-bot: análisis horario con chrono (ver servidor/analisis_chrono.py). Va en /etc/cron.hourly/.
+exec python3 /opt/arriendo-bot/servidor/analisis_chrono.py >> /data/chrono/analisis.log 2>&1

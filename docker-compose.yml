@@ -35,6 +35,7 @@ services:
     volumes:
       - ./config:/config:ro
       - /data/fotos:/fotos:ro
+      - /data/chrono:/chrono:ro       # analisis.json que deja servidor/analisis_chrono.py
     ports:
       - "8000:8000"
     depends_on:

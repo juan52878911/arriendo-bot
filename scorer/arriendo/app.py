@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import yaml
 
-from . import db, externos, ingesta
+from . import db, externos, ingesta, mercado
 from .externos import e
 from .puntaje import evaluar
 
@@ -412,6 +412,9 @@ def puntuar(id_: str) -> None:
             if r["puntaje"] >= cfg["avisos"]["umbral"] - cfg["avisos"].get("margen_fotos", 15):
                 analizar_fotos(conn, i)
         ctx["fotos"] = resumen_fotos(conn, id_)
+        ctx["sospechas"] = conn.execute("""SELECT s.parecido, s.distancia, s.motivo, i.url, i.retirado IS NOT NULL AS retirado
+                                           FROM sospecha s JOIN inmueble i ON i.id = s.parecido
+                                           WHERE s.inmueble = %s""", (id_,)).fetchall()
         r = evaluar(i, ctx, cfg)
         conn.execute("""UPDATE inmueble SET sector = %s, localidad = %s, tm_m = %s, tiempo_min = %s,
                           tiempo_fuente = %s, puntaje = %s, detalle = %s, descartes = %s, alertas = %s,
@@ -781,41 +784,120 @@ def pagina_etiquetar() -> FileResponse:
 
 @app.get("/api/historial.jsonl")
 def historial() -> Response:
-    """Eventos del mercado en el formato JSONL que lee chrono (`chrono add historial.jsonl`):
-    `service` es el barrio catastral, así `chrono top`/`timeline`/`correlate` agrupan por zona.
-
-    nuevo = primera vez visto · baja/sube = cambio de precio · retirado = el anuncio ya no existe en el portal
-    (comprobado abriéndolo, no solo por dejar de aparecer en la primera página).
-    """
+    """Eventos del mercado para chrono; `service` es el barrio catastral (ver mercado.historial)."""
     with db.connect() as conn:
-        filas = conn.execute("""
-            WITH p AS (
-              SELECT inmueble, visto, total, lag(total) OVER (PARTITION BY inmueble ORDER BY visto) AS antes
-              FROM precio)
-            SELECT p.inmueble, p.visto, p.total, p.antes, i.portal, i.area, i.habitaciones,
-                   coalesce(s.nombre, i.barrio_portal, 'SIN ZONA') AS zona, i.localidad
-            FROM p JOIN inmueble i ON i.id = p.inmueble LEFT JOIN sector s ON s.codigo = i.sector
-            UNION ALL
-            SELECT i.id, i.retirado, NULL, i.total, i.portal, i.area,
-                   i.habitaciones, coalesce(s.nombre, i.barrio_portal, 'SIN ZONA'), i.localidad
-            FROM inmueble i LEFT JOIN sector s ON s.codigo = i.sector
-            WHERE i.retirado IS NOT NULL
-            ORDER BY 2""").fetchall()
-    lineas = []
-    for f in filas:
-        if f["total"] is None:
-            tipo, msg = "retirado", f"retirado {f['inmueble']} (último ${f['antes']:,.0f})"
-        elif f["antes"] is None:
-            tipo, msg = "nuevo", f"nuevo {f['inmueble']} ${f['total']:,.0f} {f['habitaciones'] or '?'} hab {f['area'] or '?'} m²"
-        else:
-            tipo = "baja" if f["total"] < f["antes"] else "sube"
-            msg = f"{tipo} {f['inmueble']} ${f['antes']:,.0f} → ${f['total']:,.0f}"
-        lineas.append(json.dumps({
-            "id": f"{f['inmueble']}@{f['visto'].isoformat()}", "ts": f["visto"].isoformat(),
-            "msg": msg.replace(",", "."), "level": tipo, "service": f["zona"], "localidad": f["localidad"],
-            "portal": f["portal"], "total": f["total"] or f["antes"], "area": f["area"],
-            "habitaciones": f["habitaciones"]}, ensure_ascii=False))
-    return Response("\n".join(lineas) + "\n", media_type="application/x-ndjson")
+        eventos = mercado.historial(conn)
+    return Response("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in eventos), media_type="application/x-ndjson")
+
+
+@app.get("/api/textos.jsonl")
+def textos() -> Response:
+    """Descripciones de los anuncios para `chrono similar` (ver mercado.textos)."""
+    with db.connect() as conn:
+        filas = mercado.textos(conn)
+    return Response("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in filas), media_type="application/x-ndjson")
+
+
+@app.post("/api/sospechas", dependencies=[Depends(autorizado)])
+def sospechas(cuerpo: dict) -> dict:
+    """Pares de anuncios con texto casi idéntico, hallados por chrono en el servidor."""
+    nuevas = 0
+    with db.connect() as conn:
+        for s_ in cuerpo.get("pares", []):
+            # Mismo texto, mismas habitaciones, área y precio en portales distintos: es el mismo
+            # apartamento aunque las coordenadas difieran (cada portal geocodifica a su manera). El más
+            # reciente pasa a duplicado del primero.
+            dup = conn.execute("""
+                UPDATE inmueble n SET duplicado_de = v.id
+                FROM inmueble a, inmueble b, LATERAL (SELECT CASE WHEN a.visto_primero <= b.visto_primero THEN a ELSE b END AS v,
+                                                             CASE WHEN a.visto_primero <= b.visto_primero THEN b ELSE a END AS nuevo) o,
+                     LATERAL (SELECT (o.v).id) v(id)
+                WHERE a.id = %(a)s AND b.id = %(b)s AND %(d)s <= 1 AND a.portal <> b.portal
+                  AND a.habitaciones = b.habitaciones AND abs(a.area - b.area) <= 0.05 * greatest(a.area, b.area)
+                  AND abs(a.total - b.total) <= 0.1 * greatest(a.total, b.total)
+                  AND n.id = (o.nuevo).id AND n.duplicado_de IS NULL""",
+                               {"a": s_["inmueble"], "b": s_["parecido"], "d": s_.get("distancia", 99)})
+            if dup.rowcount:
+                continue
+            # Mismo apartamento en otro portal = esperado. Mismo anunciante y mismo apartamento (habitaciones,
+            # área ±5 %, a menos de 150 m) = republicación. Mismo anunciante con otro apartamento = su
+            # plantilla de texto, no se marca. Otro anunciante con el mismo texto = copia (típico de estafas).
+            mismo_anunciante = f"{mercado.ANUNCIANTE.replace('i.', 'a.')} = {mercado.ANUNCIANTE.replace('i.', 'b.')}"
+            # Republicar = el anterior ya no está (retirado o sin verse) cuando aparece el nuevo. Si los dos
+            # siguen activos a la vez son unidades iguales del mismo edificio, no una republicación.
+            mismo_apto = """a.habitaciones = b.habitaciones AND abs(a.area - b.area) <= 0.05 * greatest(a.area, b.area)
+                            AND ST_DWithin(a.geom::geography, b.geom::geography, 150)
+                            AND (b.retirado <= a.visto_primero OR b.visto_ultimo < a.visto_primero - interval '2 days'
+                                 OR a.retirado <= b.visto_primero OR a.visto_ultimo < b.visto_primero - interval '2 days')"""
+            r = conn.execute(f"""INSERT INTO sospecha (inmueble, parecido, distancia, motivo)
+                                SELECT a.id, b.id, %(d)s,
+                                       CASE WHEN {mismo_anunciante} THEN 'republicación del mismo apartamento'
+                                            ELSE 'texto copiado de otro anunciante' END
+                                FROM inmueble a, inmueble b
+                                WHERE a.id = %(a)s AND b.id = %(b)s
+                                  AND coalesce(a.duplicado_de, a.id) <> coalesce(b.duplicado_de, b.id)
+                                  AND (NOT coalesce({mismo_anunciante}, false) OR coalesce({mismo_apto}, false))
+                                ON CONFLICT DO NOTHING""",
+                             {"a": s_["inmueble"], "b": s_["parecido"], "d": s_.get("distancia")})
+            if r.rowcount:
+                nuevas += 1
+                pendientes.put(s_["inmueble"])
+    return {"nuevas": nuevas}
+
+
+@app.post("/api/metricas/registrar", dependencies=[Depends(autorizado)])
+def registrar_metricas(cuerpo: dict | None = None) -> dict:
+    with db.connect() as conn:
+        return mercado.registrar_metricas(conn, (cuerpo or {}).get("externas"))
+
+
+@app.post("/api/experimentos", dependencies=[Depends(autorizado)])
+def experimento(cuerpo: dict) -> dict:
+    """Marca cuándo se activa un cambio, para comparar sus métricas antes y después."""
+    with db.connect() as conn:
+        conn.execute("""INSERT INTO experimento (nombre, detalle) VALUES (%s, %s)
+                        ON CONFLICT (nombre) DO UPDATE SET detalle = EXCLUDED.detalle""",
+                     (cuerpo["nombre"], json.dumps(cuerpo.get("detalle"))))
+    return {"ok": True}
+
+
+@app.get("/api/metricas")
+def metricas(dias: int = 30) -> dict:
+    with db.connect() as conn:
+        serie = conn.execute("""SELECT dia, nombre, clave, valor FROM metrica
+                                WHERE dia >= current_date - %s ORDER BY dia, nombre, clave""", (dias,)).fetchall()
+        experimentos = conn.execute("SELECT nombre, activado, detalle FROM experimento ORDER BY activado").fetchall()
+        comparaciones = [c for c in (mercado.antes_y_despues(conn, x["nombre"], "demora_deteccion_min")
+                                     for x in experimentos) if c]
+    return {"serie": serie, "experimentos": experimentos, "comparaciones": comparaciones,
+            "definiciones": {k: v[1] for k, v in mercado.METRICAS.items()}, "analisis": leer_analisis()}
+
+
+def leer_analisis() -> dict | None:
+    """Lo que calcula chrono en el servidor (servidor/analisis_chrono.py) y deja en el NAS."""
+    p = Path(os.environ.get("ARRIENDO_CHRONO", "/chrono")) / "analisis.json"
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+@app.get("/api/resumen")
+def ver_resumen() -> dict:
+    with db.connect() as conn:
+        return {"texto": mercado.resumen(conn, leer_analisis())}
+
+
+@app.post("/api/resumen/enviar", dependencies=[Depends(autorizado)])
+def enviar_resumen() -> dict:
+    with db.connect() as conn:
+        texto = mercado.resumen(conn, leer_analisis())
+    return {"enviado": externos.telegram(texto), "texto": texto}
+
+
+@app.get("/mercado")
+def pagina_mercado() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "mercado.html")
 
 
 @app.get("/salud")
