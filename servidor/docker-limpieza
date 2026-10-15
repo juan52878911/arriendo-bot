@@ -1,0 +1,5 @@
+#!/bin/sh
+# arriendo-bot: borra imágenes sin usar y caché de construcción de más de una semana.
+# Va en /etc/cron.weekly/docker-limpieza del LXC.
+docker image prune -f >/dev/null
+docker builder prune -f --filter until=168h >/dev/null
