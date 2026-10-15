@@ -553,6 +553,18 @@ def vigilante() -> None:
             log.exception("La vigilancia falló; sigue en una hora")
 
 
+@app.post("/api/aviso", dependencies=[Depends(autorizado)])
+def aviso(cuerpo: dict) -> dict:
+    """Aviso de salud desde fuera del scorer (p. ej. la prueba semanal de respaldos)."""
+    mensaje = str(cuerpo.get("mensaje", ""))[:500]
+    log.warning("Aviso externo: %s", mensaje)
+    externos.telegram(f"⚠️ <b>arriendo-bot</b>: {e(mensaje)}")
+    with db.connect() as conn:
+        conn.execute("""INSERT INTO aviso_salud (clave) VALUES (%s)
+                        ON CONFLICT (clave) DO UPDATE SET enviado = now()""", (f"externo:{cuerpo.get('clave', 'otro')}",))
+    return {"ok": True}
+
+
 @app.get("/api/estado")
 def estado_sistema() -> dict:
     with db.connect() as conn:

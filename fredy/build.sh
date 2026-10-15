@@ -21,6 +21,12 @@ for portal in fincaraiz metrocuadrado ciencuadras; do
   cp "$portal.js" "upstream/lib/provider/$portal.js"
 done
 
+# Sus pruebas (node --test test-arriendo/portales.test.mjs dentro del contenedor).
+rm -rf upstream/test-arriendo && cp -R tests upstream/test-arriendo
+sed -i.bak "s|^COPY --chown=node:node lib ./lib|COPY --chown=node:node lib ./lib\nCOPY --chown=node:node test-arriendo ./test-arriendo|" upstream/Dockerfile
+rm -f upstream/Dockerfile.bak
+grep -q "test-arriendo" upstream/Dockerfile
+
 # 2. Que la interfaz lo ordene y que el mapa pueda ir a Colombia.
 sed -i.bak "s|^  // Switzerland|  // Colombia\n  'fincaraiz',\n  'metrocuadrado',\n  'ciencuadras',\n  // Switzerland|" upstream/ui/src/services/providerOrder.js
 sed -i.bak "s|^export const COUNTRY_BOUNDS = {|export const COUNTRY_BOUNDS = {\n  co: [\n    [-79.1, -4.3],\n    [-66.8, 12.6],\n  ],|" upstream/ui/src/components/map/countryBounds.js

@@ -12,6 +12,12 @@
  * exact `createdAt`. The server ignores filter parameters - only the path counts - so a job points
  * at one neighbourhood (`/arriendo/apartamento/bogota/<barrio>`), which is short enough for a page.
  *
+ * A locality has more listings than one page holds and the server ignores pagination too, so a job
+ * can list neighbourhoods instead: `…/bogota/teusaquillo?barrios=armenia,palermo,…`. Each run reads
+ * `CIENCUADRAS_POR_PASADA` of them (default 10), rotating with the hour so that every neighbourhood is
+ * read every few hours. The rotation comes from the clock, not from module state: providers are
+ * stateless (two runs of a job can overlap).
+ *
  * Raw records go to the arriendo-bot scorer when `ARRIENDO_RAW_URL` is set.
  */
 
@@ -64,23 +70,55 @@ function shareRaw(records, searchUrl) {
   }).catch((err) => logger.warn(`Could not hand Ciencuadras records to the scorer: ${err.message}`));
 }
 
+const PER_RUN = Number(process.env.CIENCUADRAS_POR_PASADA ?? 10);
+const PAGE_DELAY_MS = 3000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The search pages one run reads: the URL itself, or this hour's share of its `barrios` list.
+ *
+ * @param {string} url
+ * @param {Date} [now]
+ * @returns {string[]}
+ */
+export function pagesForRun(url, now = new Date()) {
+  const parsed = new URL(url);
+  const barrios = (parsed.searchParams.get('barrios') ?? '').split(',').map((b) => b.trim()).filter(Boolean);
+  if (barrios.length === 0) {
+    return [url];
+  }
+  const turns = Math.ceil(barrios.length / PER_RUN);
+  const turn = Math.floor(now.getTime() / 3_600_000) % turns;
+  return barrios
+    .filter((_, i) => i % turns === turn)
+    .map((b) => `${BASE_URL}/arriendo/apartamento/bogota/${encodeURIComponent(b)}`);
+}
+
 /**
  * @param {string} url
  * @returns {Promise<Object[]>}
  */
 async function getListings(url) {
-  const response = await fetch(url, { headers: REQUEST_HEADERS });
-  if (!response.ok) {
-    logger.error(`Error fetching Ciencuadras: ${response.status} ${response.statusText}`);
-    return [];
+  const results = [];
+  const pages = pagesForRun(url);
+  for (const [n, page] of pages.entries()) {
+    if (n > 0) {
+      await sleep(PAGE_DELAY_MS);
+    }
+    const response = await fetch(page, { headers: REQUEST_HEADERS });
+    if (!response.ok) {
+      logger.error(`Error fetching Ciencuadras ${page}: ${response.status} ${response.statusText}`);
+      continue;
+    }
+    const parsed = parseSearchPage(await response.text());
+    if (parsed == null) {
+      logger.error(`Ciencuadras page ${page} carried no results; the page layout may have changed`);
+      continue;
+    }
+    results.push(...parsed);
   }
-  const results = parseSearchPage(await response.text());
-  if (results == null) {
-    logger.error('Ciencuadras page carried no results; the page layout may have changed');
-    return [];
-  }
-  const records = results
-    .filter((r) => r?.id != null)
+  const seen = new Map(results.filter((r) => r?.id != null).map((r) => [r.id, r]));
+  const records = [...seen.values()]
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
   shareRaw(records, url);
   return records;

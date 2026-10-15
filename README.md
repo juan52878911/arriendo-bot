@@ -69,7 +69,10 @@ curl -X POST -H "Authorization: Bearer $ARRIENDO_TOKEN" http://localhost:8000/ap
   (`/api/estado`).
 - Un anuncio que deja de verse en los listados no se da por retirado: se abre su página (hasta 30
   por hora, con pausa) y solo se marca si el portal ya no lo tiene.
-- Respaldos diarios en el NAS: PostGIS (`arriendo-*.dump`) y el SQLite de Fredy (`fredy-*.db`).
+- Respaldos diarios en el NAS: PostGIS (`arriendo-*.dump`) y el SQLite de Fredy (`fredy-*.db`). Cada
+  semana `servidor/probar-respaldos.sh` restaura el último en una base temporal y avisa si falla.
+- Cada semana `servidor/probar-portales.sh` abre una búsqueda real en cada portal (las pruebas de
+  `fredy/tests/`) y avisa si alguno cambió su página.
 
 ## Correos de alerta (respaldo)
 
@@ -106,10 +109,14 @@ repuntúa, sin volver a descargarlas.
 
 ## Historial con chrono
 
+El servidor lo indexa cada día (`servidor/chrono-sync.sh`, índice en el NAS `/data/chrono`):
+
 ```bash
-sh chrono/sync.sh            # en tu Mac, con chrono instalado
-cd chrono && chrono top entity && chrono events --level baja
+ssh arriendo 'cd /data/chrono && chrono top entity'          # barrios con más movimiento
+ssh arriendo 'cd /data/chrono && chrono events --level baja' # bajadas de precio
 ```
+
+Para tenerlo en tu Mac: `sh chrono/sync.sh`.
 
 ## Datos y sus límites
 
