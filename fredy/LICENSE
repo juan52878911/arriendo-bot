@@ -1,0 +1,9 @@
+The portal providers in this directory (fincaraiz.js, metrocuadrado.js and ciencuadras.js) are
+built into Fredy (https://github.com/orangecoding/fredy, by Christian Kellner) and are licensed
+under Fredy's license: Apache-2.0 with Commons Clause and Attribution/Naming Clause. See
+https://github.com/orangecoding/fredy/blob/master/LICENSE.
+
+They are NOT covered by the MIT License at the root of this repository. Everything else in this
+repository (build.sh, configurar.mjs, tests/) is MIT.
+
+Copyright (c) 2026 JuanPBedoya
