@@ -99,6 +99,13 @@ no a la URL. Las URLs ya vistas no se vuelven a descargar. Las fotos sin etiquet
 retirados hace más de 180 días se borran del NAS; las etiquetadas se quedan como material de
 entrenamiento.
 
+## Gráfica integrada
+
+La visión usa la Intel UHD 630 de `pve` con OpenVINO en media precisión (f16): 12 fotos en 0,85 s
+frente a 1,69 s en CPU, con los mismos vectores (similitud ≥ 0,9999). Requiere pasar el dispositivo
+al LXC (`pct set 107 --dev0 /dev/dri/renderD128,mode=0666`) y lo usa el contenedor `vision`
+(`devices` en `docker-compose.yml`). Sin gráfica, o con `VISION_DISPOSITIVO=cpu`, sigue en CPU.
+
 ## Enseñarle a ver las fotos
 
 Las cabezas empiezan "zero-shot" (comparan la foto con frases). En `http://<servidor>:8000/etiquetar`
@@ -117,6 +124,13 @@ ssh arriendo 'cd /data/chrono && chrono events --level baja' # bajadas de precio
 ```
 
 Para tenerlo en tu Mac: `sh chrono/sync.sh`.
+
+## Uso responsable de los portales
+
+Cada búsqueda es una sola petición por hora (Ciencuadras rota 10 barrios por pasada), con pausas de
+varios segundos entre páginas, sin navegador automatizado ni evasión de bloqueos. Las fotos y el
+detalle se piden solo para los candidatos que pasan los filtros. Es una herramienta de búsqueda
+personal: si la adaptas, mantén ese ritmo y respeta los términos de cada portal.
 
 ## Datos y sus límites
 
@@ -146,5 +160,6 @@ Para tenerlo en tu Mac: `sh chrono/sync.sh`.
 
 ## Licencias
 
-Fredy se distribuye bajo Apache-2.0 con Commons Clause: uso personal sí, venderlo no. Los datos
+Fredy se distribuye bajo Apache-2.0 con Commons Clause: uso personal sí, venderlo no. Los portales de
+`fredy/` (Fincaraíz, Metrocuadrado, Ciencuadras) se compilan dentro de Fredy y llevan su misma licencia. Los datos
 abiertos de Bogotá son CC BY / CC BY-SA: si publicas algo hecho con ellos, cita la fuente.

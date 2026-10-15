@@ -1,6 +1,8 @@
 /*
- * Copyright (c) 2026 by Christian Kellner.
- * Licensed under Apache-2.0 with Commons Clause and Attribution/Naming Clause
+ * Copyright (c) 2026 JuanPBedoya (arriendo-bot).
+ * Portal Fincaraíz para Fredy (https://github.com/orangecoding/fredy), de Christian Kellner. Se compila
+ * dentro de Fredy, así que se distribuye con su misma licencia: Apache-2.0 con Commons Clause y
+ * cláusula de atribución.
  */
 
 /**
