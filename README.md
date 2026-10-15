@@ -160,6 +160,7 @@ personal: si la adaptas, mantén ese ritmo y respeta los términos de cada porta
 
 ## Licencias
 
-Fredy se distribuye bajo Apache-2.0 con Commons Clause: uso personal sí, venderlo no. Los portales de
-`fredy/` (Fincaraíz, Metrocuadrado, Ciencuadras) se compilan dentro de Fredy y llevan su misma licencia. Los datos
+Este repositorio es [MIT](LICENSE), con una excepción: los portales `fredy/fincaraiz.js`,
+`fredy/metrocuadrado.js` y `fredy/ciencuadras.js` se compilan dentro de Fredy y llevan su licencia
+(Apache-2.0 con Commons Clause: uso personal sí, venderlo no). Los datos
 abiertos de Bogotá son CC BY / CC BY-SA: si publicas algo hecho con ellos, cita la fuente.
