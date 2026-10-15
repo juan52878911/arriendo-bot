@@ -50,6 +50,7 @@ def cargar() -> None:
         AutoProcessor.from_pretrained(nombre).save_pretrained(local)
     estado["modelo"] = SiglipModel.from_pretrained(local).eval()
     estado["proc"] = AutoProcessor.from_pretrained(local)
+    estado["gpu"] = compilar_gpu(local)
     estado["cfg"] = cfg
     # Vectores de texto de cada clase, para el modo zero-shot.
     m = estado["modelo"]
@@ -65,6 +66,43 @@ def cargar() -> None:
     log.info("Modelo %s listo; cabezas entrenadas: %s", nombre, list(estado["entrenadas"]))
 
 
+class _Imagen(torch.nn.Module):
+    """Solo la parte de imágenes de SigLIP, para exportarla a OpenVINO."""
+    def __init__(self, m):
+        super().__init__()
+        self.m = m
+
+    def forward(self, pixel_values):
+        return self.m.get_image_features(pixel_values=pixel_values)
+
+
+def compilar_gpu(local: Path):
+    """La gráfica integrada (Intel UHD 630, OpenVINO en f16) calcula los vectores el doble de rápido
+    que la CPU con el mismo resultado (similitud 0,9999 en la prueba). Si no hay gráfica, None y se usa
+    PyTorch en CPU. El modelo exportado se guarda en el NAS junto al original."""
+    if os.environ.get("VISION_DISPOSITIVO", "auto") == "cpu":
+        return None
+    try:
+        import openvino as ov
+        core = ov.Core()
+        if "GPU" not in core.available_devices:
+            log.info("Sin gráfica para OpenVINO; visión en CPU")
+            return None
+        ir = local.parent / f"{local.name}-openvino" / "imagen.xml"
+        if not ir.exists():
+            ejemplo = estado["proc"](images=[Image.new("RGB", (224, 224))] * 2, return_tensors="pt")["pixel_values"]
+            modelo = ov.convert_model(_Imagen(estado["modelo"]).eval(), example_input=ejemplo,
+                                      input=[(-1, 3, 224, 224)])
+            ir.parent.mkdir(parents=True, exist_ok=True)
+            ov.save_model(modelo, ir, compress_to_fp16=True)
+        compilado = core.compile_model(ir, "GPU", {"INFERENCE_PRECISION_HINT": "f16"})
+        log.info("Visión en la gráfica integrada (%s)", core.get_property("GPU", "FULL_DEVICE_NAME"))
+        return compilado
+    except Exception:
+        log.exception("No se pudo usar la gráfica; visión en CPU")
+        return None
+
+
 @asynccontextmanager
 async def ciclo(_: FastAPI):
     cargar()
@@ -77,7 +115,11 @@ app = FastAPI(title="arriendo-bot vision", lifespan=ciclo)
 def vectores(imagenes: list[Image.Image]) -> torch.Tensor:
     with torch.no_grad():
         x = estado["proc"](images=imagenes, return_tensors="pt")
-        return torch.nn.functional.normalize(estado["modelo"].get_image_features(**x), dim=-1)
+        if estado.get("gpu") is not None:
+            v = torch.from_numpy(estado["gpu"](x["pixel_values"].numpy())[0].astype(np.float32))
+        else:
+            v = estado["modelo"].get_image_features(**x)
+        return torch.nn.functional.normalize(v, dim=-1)
 
 
 def clasificar(cabeza: str, emb: np.ndarray) -> dict[str, float]:
@@ -215,4 +257,5 @@ def entrenar(cuerpo: dict) -> dict:
 
 @app.get("/salud")
 def salud() -> dict:
-    return {"ok": "modelo" in estado, "entrenadas": list(estado.get("entrenadas", {}))}
+    return {"ok": "modelo" in estado, "entrenadas": list(estado.get("entrenadas", {})),
+            "dispositivo": "gpu" if estado.get("gpu") is not None else "cpu"}
