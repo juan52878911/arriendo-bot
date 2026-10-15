@@ -26,7 +26,9 @@ log = logging.getLogger("vision")
 
 CONFIG = Path(os.environ.get("ARRIENDO_CONFIG", "/config")) / "vision.yaml"
 CABEZAS = Path(os.environ.get("VISION_MODELOS", "/modelos")) / "cabezas.json"
-HTTP = httpx.Client(timeout=30, follow_redirects=True, headers={"User-Agent": "arriendo-bot/0.1 (uso personal)"})
+# El redimensionador de fotos de Ciencuadras responde 404 a clientes que no se presentan como navegador.
+HTTP = httpx.Client(timeout=30, follow_redirects=True, headers={
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"})
 torch.set_num_threads(int(os.environ.get("VISION_HILOS", "3")))
 
 estado: dict = {}

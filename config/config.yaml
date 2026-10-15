@@ -22,7 +22,7 @@ pesos:                            # suman 100
   seguridad: 15
   tiempo: 10
   area: 5
-  aire_ruido: 10                  # distancia a vías principales (OSM): ruido y aire de la cuadra
+  aire_ruido: 10                  # PM2.5 (SDA), ruido nocturno (mapa de ruido) y distancia a vías principales
   estrato: 5
   cocina: 5
   amenidades: 5
@@ -40,6 +40,10 @@ parametros:
   tm_lejos_m: 1500
   muestra_min_precio: 5           # inmuebles vistos en la zona para comparar precio/m²
   estafa_ratio: 0.6               # por debajo de 0,6 veces la mediana de la zona: posible estafa
+  pm25_bueno: 12                  # µg/m³ promedio anual; la guía de la OMS es 5 y Bogotá va de 11 a 30
+  pm25_malo: 25
+  ruido_bueno_db: 50              # ruido nocturno en dB(A)
+  ruido_malo_db: 65
   via_encima_m: 30                # a menos de esto de una vía principal: alerta "sobre la avenida"
   via_cerca_m: 50                 # 0 puntos de aire y ruido
   via_lejos_m: 250                # puntaje completo

@@ -28,6 +28,10 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       VISION_URL: http://vision:8001
+      IMAP_HOST: ${IMAP_HOST:-imap.gmail.com}
+      IMAP_USER: ${IMAP_USER:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      IMAP_CARPETA: ${IMAP_CARPETA:-INBOX}
     volumes:
       - ./config:/config:ro
     ports:
@@ -95,6 +99,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  respaldo-fredy:
+    # Copia diaria y consistente (.backup, no cp: la base está en WAL) del SQLite de Fredy: jobs,
+    # canales, historial de precios y notas. 14 días en el NAS.
+    image: alpine:3.20
+    volumes:
+      - fredy-db:/db   # sin :ro: leer un SQLite en WAL necesita escribir su archivo -shm
+      - /data/respaldos:/respaldos
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        apk add --no-cache sqlite >/dev/null
+        while true; do
+          sqlite3 /db/listings.db ".backup /respaldos/fredy-$$(date +%F).db" &&
+          find /respaldos -name 'fredy-*.db' -mtime +14 -delete
+          sleep 86400
+        done
     restart: unless-stopped
 
 volumes:

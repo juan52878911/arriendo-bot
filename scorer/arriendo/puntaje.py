@@ -116,15 +116,22 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
     else:
         poner("transporte", 0.5, "sin datos de estaciones")
 
+    # Aire y ruido: PM2.5 medido (SDA), ruido nocturno (mapa de ruido) y cercanía a vías principales.
+    partes, notas = [], []
+    if contexto.get("pm25") is not None:
+        partes.append(_lineal(contexto["pm25"], par["pm25_malo"], par["pm25_bueno"]))
+        notas.append(f"PM2.5 {contexto['pm25']:.0f} µg/m³ ({contexto.get('pm25_ano')})")
+    if contexto.get("ruido_noche_db") is not None:
+        partes.append(_lineal(contexto["ruido_noche_db"], par["ruido_malo_db"], par["ruido_bueno_db"]))
+        notas.append(f"ruido nocturno ~{contexto['ruido_noche_db']:.0f} dB")
     if contexto.get("via_m") is not None:
         via = contexto["via_m"]
-        poner("aire_ruido", _lineal(via, par["via_cerca_m"], par["via_lejos_m"]),
-              f"{via:.0f} m a {contexto.get('via_nombre') or 'una vía principal'}")
+        partes.append(_lineal(via, par["via_cerca_m"], par["via_lejos_m"]))
+        notas.append(f"{via:.0f} m a {contexto.get('via_nombre') or 'una vía principal'}")
         if via < par["via_encima_m"]:
             alertas.append(f"Parece estar sobre {contexto.get('via_nombre') or 'una vía principal'} "
                            f"({via:.0f} m): revisa ruido y aire en la visita")
-    else:
-        poner("aire_ruido", 0.5, "sin datos de vías")
+    poner("aire_ruido", sum(partes) / len(partes) if partes else 0.5, ", ".join(notas) or "sin datos de aire ni ruido")
 
     partes, notas = [], []
     if contexto.get("parque_m") is not None:

@@ -61,6 +61,23 @@ Sin token, los avisos solo quedan en el log del scorer.
 curl -X POST -H "Authorization: Bearer $ARRIENDO_TOKEN" http://localhost:8000/api/recalcular
 ```
 
+## Que nada falle en silencio
+
+- Cada hora, el scorer revisa que cada portal haya traído anuncios en las últimas 24 h, que las
+  fuentes de datos estén al día y que el servicio de visión responda. Si algo falla, avisa por
+  Telegram (una vez al día por problema) y lo muestra en una franja arriba del mapa
+  (`/api/estado`).
+- Un anuncio que deja de verse en los listados no se da por retirado: se abre su página (hasta 30
+  por hora, con pausa) y solo se marca si el portal ya no lo tiene.
+- Respaldos diarios en el NAS: PostGIS (`arriendo-*.dump`) y el SQLite de Fredy (`fredy-*.db`).
+
+## Correos de alerta (respaldo)
+
+Guarda búsquedas en los portales con alertas por correo y pon `IMAP_USER` / `IMAP_PASSWORD` (en
+Gmail, una contraseña de aplicación) en `.env`. Cada 30 minutos se leen los correos de los portales
+de los últimos 7 días, se sacan los enlaces a anuncios y los que el sistema no conocía se abren y
+entran al mismo flujo. Solo lectura: no marca ni borra correos.
+
 ## Enseñarle a ver las fotos
 
 Las cabezas empiezan "zero-shot" (comparan la foto con frases). En `http://<servidor>:8000/etiquetar`
@@ -85,7 +102,10 @@ cd chrono && chrono top entity && chrono events --level baja
 | Estrato | Secretaría de Planeación: estrato por lote | Se resume por sector catastral |
 | TransMilenio | TransMilenio S.A.: estaciones troncales | Puntos |
 | Tiempo al destino | Transitous (GTFS de TransMilenio y SITP) | Por inmueble, salida 7:30 de un día hábil |
-| Aire y ruido | OpenStreetMap: distancia a vías principales | Por inmueble (indicador; la red de calidad del aire de la SDA no respondió) |
+| Aire | Secretaría de Ambiente: PM2.5 promedio anual 2025 (RMCAB interpolada) | 8 franjas de concentración |
+| Ruido nocturno | Secretaría de Ambiente: Mapa Estratégico de Ruido 2018-2021, noche, día ordinario | Por inmueble, en dB(A) |
+| Vías principales | OpenStreetMap | Distancia por inmueble |
+| Zona de 45 min al destino | Transitous, llegada 8:15 | Polígono en el mapa (se recalcula cada 30 días) |
 | Entorno | OpenStreetMap: parques de 2 ha o más, supermercados y plazas, ciclorrutas | Por inmueble |
 | Valor del suelo | Catastro: mediana del m² de terreno por manzana, 2026 | Por inmueble (informativo) |
 | Siniestros viales | Secretaría de Movilidad, histórico 2015-2021 | A menos de 150 m (alerta) |

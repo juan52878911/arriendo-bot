@@ -35,6 +35,8 @@ async def ciclo(_: FastAPI):
     db.migrate()
     threading.Thread(target=trabajador, daemon=True).start()
     threading.Thread(target=ingesta_periodica, daemon=True).start()
+    threading.Thread(target=vigilante, daemon=True).start()
+    threading.Thread(target=correo_periodico, daemon=True).start()
     yield
 
 
@@ -143,7 +145,7 @@ def desde_ciencuadras(rec: dict) -> dict:
         "banos": int(_num(rec.get("baths")) or 0) or None,
         "estrato": int(_num(rec.get("stratum")) or 0) or None, "piso": None,
         "parqueaderos": int(_num(rec.get("garages")) or 0),
-        "facilidades": rasgos, "imagenes": [rec["image"]] if rec.get("image") else [],
+        "facilidades": rasgos, "imagenes": [externos.foto_ciencuadras(rec["image"])] if rec.get("image") else [],
         "publicado": (rec.get("createdAt") or "")[:10] or None, "lat": lat, "lon": lon,
         "barrio_portal": rec.get("neighborhood"), "crudo": json.dumps(rec, ensure_ascii=False),
     }
@@ -170,11 +172,14 @@ def guardar(conn, f: dict) -> bool:
                   ELSE ST_SetSRID(ST_MakePoint(%(lon)s::float, %(lat)s::float), 4326) END,
              %(barrio_portal)s, %(crudo)s)
            ON CONFLICT (id) DO UPDATE SET url = EXCLUDED.url, titulo = EXCLUDED.titulo,
-             descripcion = EXCLUDED.descripcion, canon = EXCLUDED.canon, total = EXCLUDED.total,
+             canon = EXCLUDED.canon, total = EXCLUDED.total,
              administracion = EXCLUDED.administracion, area = EXCLUDED.area,
              habitaciones = EXCLUDED.habitaciones, banos = EXCLUDED.banos, estrato = EXCLUDED.estrato,
              piso = EXCLUDED.piso, parqueaderos = EXCLUDED.parqueaderos, facilidades = EXCLUDED.facilidades,
-             imagenes = EXCLUDED.imagenes, geom = coalesce(EXCLUDED.geom, inmueble.geom),
+             imagenes = CASE WHEN cardinality(inmueble.imagenes) > cardinality(EXCLUDED.imagenes)
+                             THEN inmueble.imagenes ELSE EXCLUDED.imagenes END,
+             descripcion = coalesce(EXCLUDED.descripcion, inmueble.descripcion),
+             geom = coalesce(EXCLUDED.geom, inmueble.geom),
              crudo = EXCLUDED.crudo, visto_ultimo = now()""", f)
     if f["total"] and (previo is None or previo["total"] != f["total"]):
         conn.execute("INSERT INTO precio (inmueble, total) VALUES (%s, %s) ON CONFLICT DO NOTHING",
@@ -234,6 +239,9 @@ def contexto(conn, i: dict, cfg: dict) -> dict:
                         FROM via ORDER BY geom <-> %(g)s::geometry LIMIT 1""", {"g": i["geom"]}).fetchone()
     if v:
         ctx.update(via_m=v["m"], via_nombre=v["nombre"] or v["tipo"])
+    a = conn.execute("SELECT pm25, ano FROM aire WHERE ST_Contains(geom, %s::geometry) LIMIT 1", (i["geom"],)).fetchone()
+    if a:
+        ctx.update(pm25=a["pm25"], pm25_ano=a["ano"])
     pq = conn.execute("""SELECT nombre, area_m2, ST_Distance(geom::geography, %(g)s::geometry::geography) AS m
                          FROM parque WHERE area_m2 >= %(min)s ORDER BY geom <-> %(g)s::geometry LIMIT 1""",
                       {"g": i["geom"], "min": cfg["parametros"]["parque_min_m2"]}).fetchone()
@@ -334,9 +342,24 @@ def puntuar(id_: str) -> None:
                     i["tiempo_min"], i["tiempo_fuente"] = minutos, "transitous"
                 time.sleep(1)
             ext = i["externos"] or {}
+            if i["portal"] == "ciencuadras" and "detalle" not in ext:
+                d = externos.detalle_ciencuadras(i["url"])
+                if d:
+                    facilidades = sorted(set((i["facilidades"] or []) + d["facilidades"]))
+                    conn.execute("""UPDATE inmueble SET descripcion = coalesce(%s, descripcion), imagenes = %s,
+                                      facilidades = %s WHERE id = %s""",
+                                 (d["descripcion"], d["imagenes"] or i["imagenes"], facilidades, id_))
+                    i["descripcion"], i["imagenes"] = d["descripcion"] or i["descripcion"], d["imagenes"] or i["imagenes"]
+                    i["facilidades"] = facilidades
+                    conn.execute("DELETE FROM foto WHERE inmueble = %s", (id_,))  # la portada vieja daba 403
+                ext = {**ext, "detalle": bool(d)}
+                conn.execute("UPDATE inmueble SET externos = %s WHERE id = %s", (json.dumps(ext), id_))
+                i["externos"] = ext
             if "suelo_m2" not in ext:
-                ext = {"suelo_m2": externos.valor_suelo_m2(i["lat"], i["lon"]),
+                ext = {**ext, "suelo_m2": externos.valor_suelo_m2(i["lat"], i["lon"]),
                        "siniestros_150m": externos.siniestros_cerca(i["lat"], i["lon"])}
+            if "ruido_noche_db" not in ext:
+                ext = {**ext, "ruido_noche_db": externos.ruido_noche_db(i["lat"], i["lon"])}
                 conn.execute("UPDATE inmueble SET externos = %s WHERE id = %s", (json.dumps(ext), id_))
                 i["externos"] = ext
             ctx.update(ext)
@@ -400,6 +423,84 @@ def trabajador() -> None:
             log.exception("No se pudo puntuar %s", id_)
 
 
+# Vigilancia: que nada falle en silencio ------------------------------------------------------
+
+PORTALES = {"fincaraiz": "Fincaraíz", "metrocuadrado": "Metrocuadrado", "ciencuadras": "Ciencuadras"}
+
+
+def problemas(conn) -> list[tuple[str, str]]:
+    """(clave, mensaje) de cada cosa que hoy no está funcionando."""
+    fuera = []
+    for portal, nombre in PORTALES.items():
+        r = conn.execute("SELECT max(visto_ultimo) AS u, now() - max(visto_ultimo) AS hace FROM inmueble WHERE portal = %s",
+                         (portal,)).fetchone()
+        if r["u"] is None or r["hace"].total_seconds() > 24 * 3600:
+            horas = "nunca" if r["u"] is None else f"hace {r['hace'].total_seconds() / 3600:.0f} h"
+            fuera.append((f"portal:{portal}", f"{nombre} no trae anuncios desde {horas}: puede haber cambiado su "
+                                              "página o estar bloqueando. Revisa el log de Fredy."))
+    for f in db.fuentes():
+        r = conn.execute("SELECT now() - actualizada AS hace FROM fuente WHERE id = %s", (f["id"],)).fetchone()
+        if r is None or r["hace"].days > 3 * f["frecuencia_dias"]:
+            fuera.append((f"fuente:{f['id']}", f"La fuente de datos «{f['id']}» no se actualiza desde hace "
+                                               f"{'siempre' if r is None else str(r['hace'].days) + ' días'}."))
+    if externos.VISION_URL and externos.vision("/clasificar", {"fotos": []}, timeout=20) is None:
+        fuera.append(("vision", "El servicio de visión no responde: las fotos no se están analizando."))
+    return fuera
+
+
+def comprobar_retirados(conn, limite: int = 30) -> int:
+    """Abre los anuncios que dejaron de verse en los listados antes de darlos por retirados: los
+    portales solo se leen en su primera página, y bajar de página no es retirarse."""
+    filas = conn.execute("""SELECT id, url FROM inmueble
+                            WHERE retirado IS NULL AND visto_ultimo < now() - interval '3 days'
+                              AND (comprobado IS NULL OR comprobado < now() - interval '2 days')
+                            ORDER BY visto_ultimo LIMIT %s""", (limite,)).fetchall()
+    retirados = 0
+    for f in filas:
+        ident = f["id"].split(":", 1)[1].split("-")[-1]
+        try:
+            r = externos.HTTP.get(f["url"], headers=externos.NAVEGADOR, follow_redirects=True)
+            fuera = r.status_code in (404, 410) or ident not in str(r.url) or ident not in r.text
+        except Exception as e:  # sin respuesta no se concluye nada
+            log.warning("No se pudo comprobar %s: %s", f["url"], e)
+            continue
+        conn.execute(f"UPDATE inmueble SET {'retirado' if fuera else 'comprobado'} = now() WHERE id = %s", (f["id"],))
+        retirados += fuera
+        time.sleep(3)
+    return retirados
+
+
+def vigilante() -> None:
+    while True:
+        time.sleep(3600)
+        try:
+            with db.connect() as conn:
+                n = comprobar_retirados(conn)
+                if n:
+                    log.info("%s anuncios comprobados como retirados", n)
+                for clave, mensaje in problemas(conn):
+                    ya = conn.execute("SELECT 1 FROM aviso_salud WHERE clave = %s AND enviado > now() - interval '24 hours'",
+                                      (clave,)).fetchone()
+                    if ya:
+                        continue
+                    log.warning("Problema: %s", mensaje)
+                    externos.telegram(f"⚠️ <b>arriendo-bot</b>: {e(mensaje)}")
+                    conn.execute("""INSERT INTO aviso_salud (clave) VALUES (%s)
+                                    ON CONFLICT (clave) DO UPDATE SET enviado = now()""", (clave,))
+        except Exception:
+            log.exception("La vigilancia falló; sigue en una hora")
+
+
+@app.get("/api/estado")
+def estado_sistema() -> dict:
+    with db.connect() as conn:
+        return {"problemas": [m for _, m in problemas(conn)],
+                "portales": conn.execute("""SELECT portal, count(*) FILTER (WHERE retirado IS NULL) AS activos,
+                                              count(retirado) AS retirados, max(visto_ultimo) AS ultimo
+                                            FROM inmueble GROUP BY portal ORDER BY portal""").fetchall(),
+                "fuentes": conn.execute("SELECT id, actualizada, filas FROM fuente ORDER BY id").fetchall()}
+
+
 def ingesta_periodica() -> None:
     while True:
         try:
@@ -409,6 +510,24 @@ def ingesta_periodica() -> None:
             time.sleep(6 * 3600)
             continue
         time.sleep(24 * 3600)
+
+
+# Correos de alerta de los portales ------------------------------------------------------------
+
+def correo_periodico() -> None:
+    from . import correo
+    if not correo.configurado():
+        log.info("Lector de correos sin configurar (IMAP_USER / IMAP_PASSWORD); no se leen alertas")
+        return
+    while True:
+        try:
+            with db.connect() as conn:
+                nuevos = correo.leer(conn, guardar, pendientes.put)
+            if nuevos:
+                log.info("Correos de alerta: %s anuncios nuevos", nuevos)
+        except Exception:
+            log.exception("La lectura de correos falló; se reintenta en 30 min")
+        time.sleep(1800)
 
 
 # Consulta ----------------------------------------------------------------------------------
@@ -426,10 +545,10 @@ def recalcular() -> dict:
 @app.get("/api/inmuebles")
 def inmuebles(todos: bool = False, limite: int = 300) -> list[dict]:
     filtro = "" if todos else ("WHERE coalesce(cardinality(descartes), 0) = 0 AND puntaje IS NOT NULL"
-                               " AND duplicado_de IS NULL")
+                               " AND duplicado_de IS NULL AND retirado IS NULL")
     with db.connect() as conn:
         return conn.execute(f"""
-            SELECT id, portal, duplicado_de, url, fredy_url, titulo, total, area, habitaciones, banos, estrato, puntaje, detalle,
+            SELECT id, portal, duplicado_de, retirado, url, fredy_url, titulo, total, area, habitaciones, banos, estrato, puntaje, detalle,
                    descartes, alertas, tiempo_min, tiempo_fuente, barrio_portal, localidad,
                    (SELECT nombre FROM sector s WHERE s.codigo = i.sector) AS sector_nombre,
                    imagenes[1] AS foto, publicado, visto_primero, ST_Y(geom) AS lat, ST_X(geom) AS lon
@@ -445,6 +564,32 @@ def sectores() -> dict:
                                 FROM sector""").fetchall()
     return {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": json.loads(f.pop("g")), "properties": f} for f in filas]}
+
+
+CAPAS = {
+    # nombre: (consulta, simplificación en grados)
+    "isocrona": ("SELECT id, minutos, geom FROM isocrona", 0.0002),
+    "aire": ("SELECT id, pm25, ano, geom FROM aire", 0.0005),
+    "parques": ("SELECT id, nombre, round(area_m2 / 10000) AS ha, geom FROM parque WHERE area_m2 >= 20000", 0.0001),
+    "mercados": ("SELECT id, tipo, nombre, geom FROM poi", 0),
+    "vias": ("SELECT id, tipo, nombre, geom FROM via WHERE tipo IN ('motorway', 'trunk', 'primary')", 0.0002),
+    "estaciones": ("SELECT id, nombre, geom FROM estacion_tm", 0),
+}
+
+
+@app.get("/api/capas/{nombre}")
+def capa(nombre: str) -> dict:
+    """Capas de contexto para el mapa, en GeoJSON simplificado."""
+    if nombre not in CAPAS:
+        raise HTTPException(status_code=404)
+    consulta, tolerancia = CAPAS[nombre]
+    with db.connect() as conn:
+        filas = conn.execute(f"""SELECT q.*, ST_AsGeoJSON(CASE WHEN %s > 0 THEN ST_SimplifyPreserveTopology(geom, %s)
+                                                             ELSE geom END, 5) AS g
+                                 FROM ({consulta}) q""", (tolerancia, tolerancia)).fetchall()
+    return {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": json.loads(f.pop("g")), "properties": {k: v for k, v in f.items() if k != "geom"}}
+        for f in filas]}
 
 
 @app.get("/api/fuentes")
@@ -511,11 +656,12 @@ def pagina_etiquetar() -> FileResponse:
 # Historial para chrono ------------------------------------------------------------------------
 
 @app.get("/api/historial.jsonl")
-def historial(dias_retiro: int = 3) -> Response:
+def historial() -> Response:
     """Eventos del mercado en el formato JSONL que lee chrono (`chrono add historial.jsonl`):
     `service` es el barrio catastral, así `chrono top`/`timeline`/`correlate` agrupan por zona.
 
-    nuevo = primera vez visto · baja/sube = cambio de precio · retirado = sin verse en `dias_retiro` días.
+    nuevo = primera vez visto · baja/sube = cambio de precio · retirado = el anuncio ya no existe en el portal
+    (comprobado abriéndolo, no solo por dejar de aparecer en la primera página).
     """
     with db.connect() as conn:
         filas = conn.execute("""
@@ -526,11 +672,11 @@ def historial(dias_retiro: int = 3) -> Response:
                    coalesce(s.nombre, i.barrio_portal, 'SIN ZONA') AS zona, i.localidad
             FROM p JOIN inmueble i ON i.id = p.inmueble LEFT JOIN sector s ON s.codigo = i.sector
             UNION ALL
-            SELECT i.id, i.visto_ultimo + make_interval(days => %s), NULL, i.total, i.portal, i.area,
+            SELECT i.id, i.retirado, NULL, i.total, i.portal, i.area,
                    i.habitaciones, coalesce(s.nombre, i.barrio_portal, 'SIN ZONA'), i.localidad
             FROM inmueble i LEFT JOIN sector s ON s.codigo = i.sector
-            WHERE i.visto_ultimo < now() - make_interval(days => %s)
-            ORDER BY 2""", (dias_retiro, dias_retiro)).fetchall()
+            WHERE i.retirado IS NOT NULL
+            ORDER BY 2""").fetchall()
     lineas = []
     for f in filas:
         if f["total"] is None:

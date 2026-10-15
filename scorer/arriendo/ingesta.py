@@ -220,8 +220,49 @@ def cargar_osm(fuente: dict, conn) -> int:
     return n
 
 
+def cargar_aire(fuente: dict, conn) -> int:
+    n = 0
+    for f in arcgis(fuente["url"]):
+        p, geom = f["properties"], _geom(f)
+        if not geom or p.get("conc_pm25") is None:
+            continue
+        conn.execute("""INSERT INTO aire (id, pm25, ano, geom)
+                        VALUES (%s, %s, %s, ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326)))
+                        ON CONFLICT (id) DO UPDATE SET pm25 = EXCLUDED.pm25, ano = EXCLUDED.ano, geom = EXCLUDED.geom""",
+                     (str(p["id"]), p["conc_pm25"], p.get("ano"), geom))
+        n += 1
+    return n
+
+
+def cargar_isocrona(fuente: dict, conn) -> int:
+    """Zona desde la que se llega al destino en `minutos` o menos (llegada 8:15 de un día
+    hábil): paradas alcanzables según Transitous + lo que se camina en el tiempo que sobra."""
+    from .externos import DESTINO, proxima_salida
+    minutos, metros_min, max_m = fuente.get("minutos", 45), 75, 800
+    llegada = proxima_salida().replace(hour=8, minute=15)
+    r = HTTP.get("https://api.transitous.org/api/v6/one-to-all", params={
+        "one": f"{DESTINO[0]},{DESTINO[1]}", "time": llegada.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "maxTravelTime": minutos, "maxPreTransitTime": 900, "arriveBy": "true",
+        "transitModes": "TRANSIT", "preTransitModes": "WALK"})
+    r.raise_for_status()
+    puntos = [(e["place"]["lon"], e["place"]["lat"], min(max_m, (minutos - e["duration"]) * metros_min))
+              for e in r.json().get("all", []) if e.get("duration", minutos) < minutos]
+    puntos.append((DESTINO[1], DESTINO[0], min(max_m * 2, minutos * metros_min)))
+    conn.execute("""
+        WITH p AS (SELECT unnest(%s::float[]) AS lon, unnest(%s::float[]) AS lat, unnest(%s::float[]) AS r)
+        INSERT INTO isocrona (id, minutos, geom)
+        SELECT %s, %s, ST_Multi(ST_SimplifyPreserveTopology(ST_Union(
+                 ST_Buffer(ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography, r)::geometry), 0.0002))
+        FROM p WHERE r > 0
+        ON CONFLICT (id) DO UPDATE SET geom = EXCLUDED.geom, minutos = EXCLUDED.minutos, calculada = now()""",
+                 ([p[0] for p in puntos], [p[1] for p in puntos], [p[2] for p in puntos],
+                  f"destino_{minutos}", minutos))
+    return len(puntos)
+
+
 LECTORES = {"seguridad_sector": cargar_sector, "delitos_localidad": cargar_localidad,
-            "estratos": cargar_estratos, "estaciones_tm": cargar_estaciones, "osm": cargar_osm}
+            "estratos": cargar_estratos, "estaciones_tm": cargar_estaciones, "osm": cargar_osm,
+            "isocrona": cargar_isocrona, "aire_pm25": cargar_aire}
 
 
 def run(forzar: bool = False) -> None:

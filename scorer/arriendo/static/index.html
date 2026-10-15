@@ -6,14 +6,17 @@
 <title>Radar de arriendos</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  :root { --bg:#f7f6f2; --card:#fff; --text:#22211e; --muted:#6b6962; --line:#e3e1da; --accent:#0f6e56; --warn:#a3562d; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1a; --card:#262624; --text:#ecebe6; --muted:#a3a19a; --line:#3a3936; --accent:#5dcaa5; --warn:#f0997b; } }
+  :root { --bg:#f7f6f2; --card:#fff; --text:#22211e; --muted:#6b6962; --line:#e3e1da; --accent:#0f6e56; --warn:#a3562d; --warnbg:#faece7; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1a; --card:#262624; --text:#ecebe6; --muted:#a3a19a; --line:#3a3936; --accent:#5dcaa5; --warn:#f0997b; --warnbg:#3a2a22; } }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
-  header { padding:12px 16px; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; border-bottom:1px solid var(--line); }
+  header { padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--line); }
   header h1 { font-size:18px; margin:0; font-weight:600; }
-  header small { color:var(--muted); }
-  main { display:grid; grid-template-columns: minmax(0,1fr) 420px; height: calc(100vh - 53px); }
+  #estado { display:none; background:var(--warnbg); color:var(--warn); padding:8px 16px; font-size:14px; border-bottom:1px solid var(--line); }
+  #filtros { display:flex; gap:12px; flex-wrap:wrap; align-items:center; padding:8px 16px; border-bottom:1px solid var(--line); font-size:13px; color:var(--muted); }
+  #filtros input[type=number] { width:110px; } #filtros input[type=text] { width:140px; }
+  #filtros input, #filtros select { font:inherit; padding:3px 6px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 420px; height: calc(100vh - 100px); }
   #mapa { height:100%; }
   #lista { overflow-y:auto; border-left:1px solid var(--line); padding:8px; }
   .item { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:8px; display:grid; grid-template-columns:88px 1fr; gap:10px; cursor:pointer; }
@@ -24,18 +27,26 @@
   .alerta { color:var(--warn); font-size:13px; }
   details { font-size:13px; margin-top:4px; }
   a { color:var(--accent); }
-  label { font-size:13px; color:var(--muted); }
+  .leaflet-control-layers { font-size:13px; }
   @media (max-width: 800px) { main { grid-template-columns:1fr; grid-template-rows: 45vh auto; height:auto; } #lista { border-left:0; } }
 </style>
 </head>
 <body>
 <header>
   <h1>Radar de arriendos</h1>
-  <small id="resumen">cargando…</small>
-  <label><input type="checkbox" id="todos"> ver descartados</label>
-  <label><input type="checkbox" id="capa" checked> capa de seguridad</label>
+  <small class="muted" id="resumen">cargando…</small>
   <a href="etiquetar">etiquetar fotos</a>
 </header>
+<div id="estado"></div>
+<div id="filtros">
+  <label>canon máx. <input type="number" id="f-precio" step="50000" value="3000000"></label>
+  <label>puntaje mín. <input type="number" id="f-puntaje" min="0" max="100" step="5" value="0"></label>
+  <label>barrio <input type="text" id="f-barrio" placeholder="p. ej. alcázares"></label>
+  <label><input type="checkbox" class="f-portal" value="fincaraiz" checked> Fincaraíz</label>
+  <label><input type="checkbox" class="f-portal" value="metrocuadrado" checked> Metrocuadrado</label>
+  <label><input type="checkbox" class="f-portal" value="ciencuadras" checked> Ciencuadras</label>
+  <label><input type="checkbox" id="todos"> incluir descartados y retirados</label>
+</div>
 <main>
   <div id="mapa"></div>
   <div id="lista"></div>
@@ -50,44 +61,95 @@ L.marker([4.5981, -74.0760], { title: 'destino' }).addTo(mapa).bindTooltip('dest
 
 const peso = n => '$' + Math.round(n).toLocaleString('es-CO');
 const color = p => p >= 80 ? '#0f6e56' : p >= 70 ? '#1d9e75' : p >= 55 ? '#ba7517' : '#a32d2d';
-let capaSeguridad, marcadores = {};
+const norm = t => (t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+let datos = [], marcadores = {};
 
-async function cargarSectores() {
-  const g = await (await fetch('api/sectores')).json();
-  capaSeguridad = L.geoJSON(g, {
-    style: f => { const p = f.properties.seguridad_pct;
-      return { weight: 0.3, color: '#888', fillOpacity: 0.25,
-               fillColor: p == null ? '#ccc' : `hsl(${120 - 120 * p}, 60%, 45%)` }; },
+// Capas de contexto: se descargan la primera vez que se encienden.
+function capaPerezosa(url, opciones, inicial) {
+  const grupo = L.layerGroup(); let cargada = false;
+  grupo.on('add', async () => {
+    if (cargada) return; cargada = true;
+    L.geoJSON(await (await fetch(url)).json(), opciones).addTo(grupo);
+  });
+  if (inicial) grupo.addTo(mapa);
+  return grupo;
+}
+const tranquilo = p => `hsl(${120 - 120 * (p ?? 0.5)}, 60%, 45%)`;
+const capas = {
+  'Zona a 45 min del destino': capaPerezosa('api/capas/isocrona',
+    { style: { color: '#185fa5', weight: 1.5, fillOpacity: 0.08, dashArray: '4 4' } }, true),
+  'Seguridad por barrio': capaPerezosa('api/sectores', {
+    style: f => ({ weight: 0.3, color: '#888', fillOpacity: 0.22, fillColor: tranquilo(f.properties.seguridad_pct) }),
     onEachFeature: (f, l) => l.bindTooltip(`${f.properties.nombre} · ${f.properties.localidad ?? ''}<br>` +
       `más tranquilo que el ${Math.round(100 - 100 * (f.properties.seguridad_pct ?? 0))}% · estrato ${f.properties.estrato_moda ?? '?'}`)
-  });
-  if (document.getElementById('capa').checked) capaSeguridad.addTo(mapa);
+  }, false),
+  'Aire (PM2.5 anual)': capaPerezosa('api/capas/aire', {
+    style: f => ({ weight: 0, fillOpacity: 0.25, fillColor: `hsl(${Math.max(0, 120 - (f.properties.pm25 - 10) * 6)}, 70%, 45%)` }),
+    onEachFeature: (f, l) => l.bindTooltip(`PM2.5 ${f.properties.pm25.toFixed(1)} µg/m³ (${f.properties.ano})`)
+  }, false),
+  'Parques de 2 ha o más': capaPerezosa('api/capas/parques', {
+    style: { color: '#3b6d11', weight: 1, fillColor: '#639922', fillOpacity: 0.35 },
+    onEachFeature: (f, l) => l.bindTooltip(`${f.properties.nombre ?? 'Parque'} · ${f.properties.ha} ha`)
+  }, false),
+  'Supermercados y plazas': capaPerezosa('api/capas/mercados', {
+    pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 3, weight: 0, fillColor: f.properties.tipo === 'plaza_mercado' ? '#993556' : '#7f77dd', fillOpacity: 0.8 }),
+    onEachFeature: (f, l) => l.bindTooltip(`${f.properties.nombre ?? f.properties.tipo}`)
+  }, false),
+  'Vías principales': capaPerezosa('api/capas/vias', { style: { color: '#a32d2d', weight: 2, opacity: 0.6 },
+    onEachFeature: (f, l) => l.bindTooltip(f.properties.nombre ?? f.properties.tipo) }, false),
+  'Estaciones de TransMilenio': capaPerezosa('api/capas/estaciones', {
+    pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 4, color: '#a32d2d', weight: 1, fillColor: '#fff', fillOpacity: 1 }),
+    onEachFeature: (f, l) => l.bindTooltip(f.properties.nombre ?? 'Estación') }, false),
+};
+L.control.layers(null, capas, { collapsed: window.innerWidth < 800 }).addTo(mapa);
+
+async function estado() {
+  try {
+    const e = await (await fetch('api/estado')).json();
+    const caja = document.getElementById('estado');
+    if (e.problemas.length) { caja.style.display = 'block'; caja.innerHTML = e.problemas.map(p => '⚠ ' + p).join('<br>'); }
+  } catch (err) {}
 }
 
 async function cargar() {
-  const todos = document.getElementById('todos').checked;
-  const datos = await (await fetch('api/inmuebles?todos=' + todos)).json();
+  datos = await (await fetch('api/inmuebles?limite=1000&todos=' + document.getElementById('todos').checked)).json();
+  pintar();
+}
+
+function filtrados() {
+  const max = Number(document.getElementById('f-precio').value) || Infinity;
+  const min = Number(document.getElementById('f-puntaje').value) || 0;
+  const barrio = norm(document.getElementById('f-barrio').value);
+  const portales = [...document.querySelectorAll('.f-portal:checked')].map(x => x.value);
+  return datos.filter(i => (i.total ?? 0) <= max && (i.puntaje ?? 0) >= min && portales.includes(i.portal)
+    && (!barrio || norm(`${i.sector_nombre} ${i.barrio_portal} ${i.localidad}`).includes(barrio)));
+}
+
+function pintar() {
   Object.values(marcadores).forEach(m => m.remove()); marcadores = {};
   const lista = document.getElementById('lista'); lista.innerHTML = '';
-  document.getElementById('resumen').textContent = `${datos.length} inmuebles ${todos ? '(todos)' : 'que cumplen los filtros'}`;
-  for (const i of datos) {
-    const descartado = (i.descartes || []).length > 0;
+  const visibles = filtrados();
+  document.getElementById('resumen').textContent = `${visibles.length} de ${datos.length} inmuebles`;
+  for (const i of visibles) {
+    const fuera = (i.descartes || []).length > 0 || i.retirado || i.duplicado_de;
     if (i.lat) {
       marcadores[i.id] = L.circleMarker([i.lat, i.lon], { radius: 8, weight: 1, color: '#fff',
-        fillColor: descartado ? '#888' : color(i.puntaje ?? 0), fillOpacity: 0.9 })
+        fillColor: fuera ? '#888' : color(i.puntaje ?? 0), fillOpacity: 0.9 })
         .addTo(mapa).bindTooltip(`${Math.round(i.puntaje ?? 0)} · ${peso(i.total ?? 0)}`)
         .on('click', () => enfocar(i.id));
     }
     const d = document.createElement('div'); d.className = 'item'; d.id = 'i-' + i.id;
-    const notas = Object.entries(i.detalle || {}).sort((a, b) => b[1].peso - a[1].peso)
+    const notas = Object.entries(i.detalle || {}).filter(([, v]) => v.peso > 0).sort((a, b) => b[1].peso - a[1].peso)
       .map(([k, v]) => `<div>${k}: ${(v.valor * 100).toFixed(0)}% — ${v.nota}</div>`).join('');
-    d.innerHTML = `<img loading="lazy" src="${i.foto ?? ''}" alt="">
+    const motivos = [...(i.descartes || []), i.retirado ? 'retirado del portal' : null,
+                     i.duplicado_de ? 'duplicado de ' + i.duplicado_de : null].filter(Boolean);
+    d.innerHTML = `<img loading="lazy" referrerpolicy="no-referrer" src="${i.foto ?? ''}" alt="">
       <div><span class="p">${i.puntaje == null ? '—' : Math.round(i.puntaje)}</span>
-        · ${i.sector_nombre ?? i.barrio_portal ?? ''} <span class="muted">${i.localidad ?? ''}</span><br>
+        · ${i.sector_nombre ?? i.barrio_portal ?? ''} <span class="muted">${i.localidad ?? ''} · ${i.portal}</span><br>
         ${i.total ? peso(i.total) : ''} · ${i.area ?? '?'} m² · ${i.habitaciones ?? '?'} hab / ${i.banos ?? '?'} baños
         ${i.tiempo_min ? ' · ' + i.tiempo_min + ' min' : ''}
         ${(i.alertas || []).map(a => `<div class="alerta">⚠ ${a}</div>`).join('')}
-        ${descartado ? `<div class="muted">Descartado: ${i.descartes.join('; ')}</div>` : ''}
+        ${motivos.length ? `<div class="muted">Fuera: ${motivos.join('; ')}</div>` : ''}
         <details><summary>por qué</summary>${notas}</details>
         <a href="${i.url}" target="_blank" rel="noopener">anuncio</a>${i.fredy_url ? ` · <a href="${i.fredy_url}" target="_blank" rel="noopener">Fredy</a>` : ''}
       </div>`;
@@ -103,9 +165,15 @@ function enfocar(id, mover) {
   if (mover && marcadores[id]) { mapa.setView(marcadores[id].getLatLng(), 15); marcadores[id].openTooltip(); }
 }
 
+// Los filtros se recuerdan en este navegador.
+const CAMPOS = ['f-precio', 'f-puntaje', 'f-barrio'];
+try { const g = JSON.parse(localStorage.getItem('filtros') || '{}');
+  CAMPOS.forEach(c => { if (g[c] != null) document.getElementById(c).value = g[c]; }); } catch (e) {}
+function guardar() { try { localStorage.setItem('filtros', JSON.stringify(Object.fromEntries(CAMPOS.map(c => [c, document.getElementById(c).value])))); } catch (e) {} }
+CAMPOS.forEach(c => document.getElementById(c).addEventListener('input', () => { guardar(); pintar(); }));
+document.querySelectorAll('.f-portal').forEach(x => x.addEventListener('change', pintar));
 document.getElementById('todos').addEventListener('change', cargar);
-document.getElementById('capa').addEventListener('change', e => capaSeguridad && (e.target.checked ? capaSeguridad.addTo(mapa) : capaSeguridad.remove()));
-cargarSectores(); cargar();
+estado(); cargar();
 </script>
 </body>
 </html>

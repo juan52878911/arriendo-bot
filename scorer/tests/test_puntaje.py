@@ -111,3 +111,15 @@ def test_fotos_suben_o_bajan_y_avisan_renders():
     assert r2["detalle"]["fotos"]["valor"] < 0.5 and any("render" in a for a in r2["alertas"])
     sin_cocina = dict(buenas, horno=None, gas=None, extractor=None)
     assert any("cocina" in a for a in evaluar(base(), {"fotos": sin_cocina}, CFG)["alertas"])
+
+
+def test_correo_extrae_enlaces_de_anuncios_sin_seguir_terceros():
+    from arriendo import correo
+    texto = """<a href="https://www.fincaraiz.com.co/apartamento-en-arriendo-en-marly-bogota/190000001?utm=x">a</a>
+    <a href="https://www.metrocuadrado.com/inmueble/arriendo-apartamento-bogota-marly-3-habitaciones/4186-M7100420">b</a>
+    <a href="https://www.ciencuadras.com/inmueble/apartamento-en-arriendo-en-marly-bogota-3884375">c</a>
+    <a href="https://www.facebook.com/fincaraiz">d</a>"""
+    assert correo.enlaces_de_anuncios(texto, "fincaraiz") == {
+        "https://www.fincaraiz.com.co/apartamento-en-arriendo-en-marly-bogota/190000001"}
+    assert len(correo.enlaces_de_anuncios(texto, "metrocuadrado")) == 1
+    assert len(correo.enlaces_de_anuncios(texto, "ciencuadras")) == 1

@@ -46,3 +46,23 @@
 #   https://serviciosgis.catastrobogota.gov.co/arcgis/rest/services/catastro/valorreferencia/MapServer/0
 # - Siniestros viales históricos 2015-2021, Secretaría de Movilidad:
 #   https://services2.arcgis.com/NEwhEo9GGSHXcRXV/arcgis/rest/services/HistoricoSiniestros/FeatureServer/0
+
+- id: isocrona
+  descripcion: Zona desde la que se llega al destino en 45 minutos (llegada 8:15, día hábil)
+  entidad: Transitous (GTFS de TransMilenio y SITP)
+  tipo: transitous
+  url: https://api.transitous.org/api/v6/one-to-all
+  tabla: isocrona
+  minutos: 45
+  frecuencia_dias: 30
+
+- id: aire_pm25
+  descripcion: Concentración de PM2.5 promedio anual 2025 por zona (red RMCAB interpolada)
+  entidad: Secretaría Distrital de Ambiente
+  tipo: arcgis
+  url: https://mapas.ambientebogota.gov.co/server/rest/services/Calidad_aire/PM_25_promedio_anual_2025/MapServer/0
+  tabla: aire
+  frecuencia_dias: 90
+
+# Consulta por inmueble: ruido nocturno, Mapa Estratégico de Ruido 2018-2021 (SDA):
+#   https://mapas.ambientebogota.gov.co/server/rest/services/Calidad_auditiva/MER_Nocturno_Jornada_Ordinario_dB_Bogota_DC__2018_2021/FeatureServer/0

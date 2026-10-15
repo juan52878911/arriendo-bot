@@ -142,3 +142,39 @@ CREATE TABLE IF NOT EXISTS etiqueta (
   creada  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (url, cabeza)
 );
+
+-- Zona alcanzable en transporte público (isócrona), para el mapa.
+CREATE TABLE IF NOT EXISTS isocrona (
+  id         text PRIMARY KEY,               -- p. ej. destino_45
+  minutos    int NOT NULL,
+  geom       geometry(MultiPolygon, 4326) NOT NULL,
+  calculada  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Retiros comprobados: un anuncio que no se ve en los listados se abre antes de darlo por retirado.
+ALTER TABLE inmueble ADD COLUMN IF NOT EXISTS retirado timestamptz;
+ALTER TABLE inmueble ADD COLUMN IF NOT EXISTS comprobado timestamptz;
+
+-- Avisos de salud del sistema ya enviados, para no repetirlos cada hora.
+CREATE TABLE IF NOT EXISTS aviso_salud (
+  clave   text PRIMARY KEY,
+  enviado timestamptz NOT NULL DEFAULT now()
+);
+
+-- Calidad del aire: PM2.5 promedio anual por zona (Secretaría de Ambiente, RMCAB interpolada).
+CREATE TABLE IF NOT EXISTS aire (
+  id    text PRIMARY KEY,
+  pm25  real NOT NULL,
+  ano   int,
+  geom  geometry(MultiPolygon, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS aire_geom ON aire USING gist (geom);
+
+-- Correos de alerta ya leídos (por Message-ID), para no procesarlos dos veces.
+CREATE TABLE IF NOT EXISTS correo (
+  mensaje   text PRIMARY KEY,
+  portal    text,
+  recibido  timestamptz,
+  enlaces   int,
+  leido     timestamptz NOT NULL DEFAULT now()
+);
