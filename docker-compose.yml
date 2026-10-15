@@ -34,6 +34,7 @@ services:
       IMAP_CARPETA: ${IMAP_CARPETA:-INBOX}
     volumes:
       - ./config:/config:ro
+      - /data/fotos:/fotos:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -49,9 +50,11 @@ services:
     build: ./vision
     environment:
       VISION_HILOS: "3"
+    # Lo pesado en el NAS de ascci: modelo, cabezas entrenadas y fotos (una por huella).
     volumes:
       - ./config:/config:ro
-      - vision-modelos:/modelos
+      - /data/modelos:/modelos
+      - /data/fotos:/fotos
     restart: unless-stopped
     deploy:
       resources:
@@ -123,4 +126,3 @@ volumes:
   pgdata:
   fredy-conf:
   fredy-db:
-  vision-modelos:

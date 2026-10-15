@@ -1,7 +1,10 @@
 """Servicio de visión: SigLIP calcula un vector por foto y unas cabezas pequeñas lo clasifican.
 
-Sin estado salvo las cabezas entrenadas (/modelos/cabezas.json). El scorer guarda los vectores, así
-que entrenar una cabeza nueva no exige volver a procesar ninguna foto.
+Todo lo pesado vive en el NAS: el modelo (/modelos/<nombre>, se descarga la primera vez), las cabezas
+entrenadas (/modelos/cabezas.json) y las fotos (/fotos/<aa>/<huella>.webp, una sola vez cada una).
+
+Cada foto lleva una huella visual (dHash de 64 bits) que no cambia al redimensionarla ni al
+recomprimirla: así el scorer reconoce la misma foto en dos portales o subida dos veces.
 """
 
 import io
@@ -25,7 +28,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 log = logging.getLogger("vision")
 
 CONFIG = Path(os.environ.get("ARRIENDO_CONFIG", "/config")) / "vision.yaml"
-CABEZAS = Path(os.environ.get("VISION_MODELOS", "/modelos")) / "cabezas.json"
+MODELOS = Path(os.environ.get("VISION_MODELOS", "/modelos"))
+CABEZAS = MODELOS / "cabezas.json"
+FOTOS = Path(os.environ.get("VISION_FOTOS", "/fotos"))
+LADO_MAX = 1024        # las fotos se guardan a lo sumo a 1024 px por lado, en WebP calidad 80
 # El redimensionador de fotos de Ciencuadras responde 404 a clientes que no se presentan como navegador.
 HTTP = httpx.Client(timeout=30, follow_redirects=True, headers={
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"})
@@ -36,9 +42,14 @@ estado: dict = {}
 
 def cargar() -> None:
     cfg = yaml.safe_load(CONFIG.read_text())
-    nombre = os.environ.get("VISION_MODELO_LOCAL", cfg["modelo"])
-    estado["modelo"] = SiglipModel.from_pretrained(nombre).eval()
-    estado["proc"] = AutoProcessor.from_pretrained(nombre)
+    nombre = cfg["modelo"]
+    local = MODELOS / nombre.replace("/", "__")
+    if not (local / "config.json").exists():
+        log.info("Descargando %s al NAS (%s), solo esta vez", nombre, local)
+        SiglipModel.from_pretrained(nombre).save_pretrained(local)
+        AutoProcessor.from_pretrained(nombre).save_pretrained(local)
+    estado["modelo"] = SiglipModel.from_pretrained(local).eval()
+    estado["proc"] = AutoProcessor.from_pretrained(local)
     estado["cfg"] = cfg
     # Vectores de texto de cada clase, para el modo zero-shot.
     m = estado["modelo"]
@@ -85,18 +96,45 @@ def clasificar(cabeza: str, emb: np.ndarray) -> dict[str, float]:
     return {c: float(p) for c, p in zip(clases, e / e.sum())}
 
 
+def huella(img: Image.Image) -> str:
+    """dHash de 64 bits: compara cada píxel con su vecino en una miniatura de 9×8 en grises."""
+    g = np.asarray(img.convert("L").resize((9, 8), Image.Resampling.LANCZOS), dtype=np.int16)
+    bits = (g[:, 1:] > g[:, :-1]).flatten()
+    return f"{int(''.join('1' if b else '0' for b in bits), 2):016x}"
+
+
+def guardar_foto(h: str, img: Image.Image) -> str:
+    """Guarda la foto en el NAS una sola vez; si ya existe una copia más pequeña, la reemplaza."""
+    ruta = FOTOS / h[:2] / f"{h}.webp"
+    if ruta.exists():
+        with Image.open(ruta) as previa:
+            if previa.width * previa.height >= min(img.width * img.height, LADO_MAX * LADO_MAX):
+                return str(ruta.relative_to(FOTOS))
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    copia = img.copy()
+    copia.thumbnail((LADO_MAX, LADO_MAX))
+    tmp = ruta.with_suffix(".tmp")
+    copia.save(tmp, "WEBP", quality=80, method=4)
+    tmp.replace(ruta)  # atómico: nunca queda un archivo a medias
+    return str(ruta.relative_to(FOTOS))
+
+
 @app.post("/analizar")
 def analizar(cuerpo: dict) -> dict:
-    """{"urls": [...]} → por foto: vector y probabilidades de cada cabeza que aplique."""
+    """{"urls": [...]} → por foto: huella, tamaño, archivo en el NAS, vector y probabilidades."""
     fotos, imagenes = [], []
     for url in cuerpo.get("urls", [])[: estado["cfg"]["fotos_por_inmueble"]]:
         try:
             r = HTTP.get(url)
             r.raise_for_status()
-            imagenes.append(Image.open(io.BytesIO(r.content)).convert("RGB"))
-            fotos.append({"url": url})
+            img = Image.open(io.BytesIO(r.content)).convert("RGB")
         except Exception as e:  # una foto rota no tumba el inmueble
             log.warning("Foto %s: %s", url, e)
+            continue
+        h = huella(img)
+        imagenes.append(img)
+        fotos.append({"url": url, "huella": h, "ancho": img.width, "alto": img.height,
+                      "archivo": guardar_foto(h, img), "bytes": len(r.content)})
     if not imagenes:
         return {"fotos": []}
     embs = vectores(imagenes).numpy()
@@ -109,6 +147,18 @@ def analizar(cuerpo: dict) -> dict:
             etiquetas[cabeza] = clasificar(cabeza, emb)
         foto.update(emb=[round(float(x), 5) for x in emb], espacio=espacio, etiquetas=etiquetas)
     return {"fotos": fotos}
+
+
+@app.post("/borrar")
+def borrar(cuerpo: dict) -> dict:
+    """Borra del NAS archivos de fotos que el scorer ya no usa (copias más pequeñas, anuncios viejos)."""
+    borrados = 0
+    for rel in cuerpo.get("archivos", []):
+        ruta = (FOTOS / rel).resolve()
+        if FOTOS.resolve() in ruta.parents and ruta.suffix == ".webp" and ruta.exists():
+            ruta.unlink()
+            borrados += 1
+    return {"borrados": borrados}
 
 
 @app.post("/clasificar")

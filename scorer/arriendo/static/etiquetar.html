@@ -53,8 +53,9 @@ async function siguiente() {
   if (!actual) { area.innerHTML = '<p class="muted">No quedan fotos sin etiquetar para este criterio.</p>'; return; }
   const pred = Object.entries(actual.pred || {}).sort((a, b) => b[1] - a[1])
     .map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(' · ');
+  const copias = actual.copias > 1 ? ` · aparece ${actual.copias} veces en los portales (cuenta como una)` : '';
   area.innerHTML = `<div class="foto"><img src="${actual.url}" alt=""><div class="muted">El modelo cree: ${pred}<br>
-    espacio: ${actual.espacio} · inmueble ${actual.inmueble}</div></div>
+    espacio: ${actual.espacio} · inmueble ${actual.inmueble}${copias}</div></div>
     <div class="botones">${clases.map((c, i) => `<button class="clase" data-c="${c}" title="${r.clases[c]}">${i + 1}. ${c}</button>`).join('')}
     <button data-c="">0. saltar</button></div>`;
   area.querySelectorAll('button').forEach(b => b.onclick = () => responder(b.dataset.c));
@@ -63,7 +64,7 @@ async function siguiente() {
 async function responder(clase) {
   if (actual && clase) {
     await fetch('api/etiquetas', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: actual.url, cabeza: sel.value, clase }) });
+      body: JSON.stringify({ huella: actual.huella, cabeza: sel.value, clase }) });
   }
   siguiente();
 }

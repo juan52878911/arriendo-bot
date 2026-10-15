@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 import yaml
 
 from . import db, externos, ingesta
@@ -41,6 +42,8 @@ async def ciclo(_: FastAPI):
 
 
 app = FastAPI(title="arriendo-bot", lifespan=ciclo)
+# Fotos guardadas en el NAS (una por huella), para la página de etiquetado.
+app.mount("/fotos", StaticFiles(directory=os.environ.get("ARRIENDO_FOTOS", "/fotos"), check_dir=False), name="fotos")
 
 
 def autorizado(authorization: str = Header(default="")) -> None:
@@ -289,8 +292,10 @@ def duplicado(conn, i: dict) -> str | None:
 
 
 def resumen_fotos(conn, id_: str) -> dict | None:
-    """Lo que dicen las fotos de un inmueble, agregado por criterio."""
-    fotos = conn.execute("SELECT espacio, etiquetas FROM foto WHERE inmueble = %s", (id_,)).fetchall()
+    """Lo que dicen las fotos de un inmueble, agregado por criterio. Cada foto real cuenta una vez
+    aunque el portal la haya subido repetida."""
+    fotos = conn.execute("""SELECT DISTINCT im.huella, im.espacio, im.etiquetas FROM foto_url f
+                            JOIN imagen im ON im.huella = f.huella WHERE f.inmueble = %s""", (id_,)).fetchall()
     if not fotos:
         return None
 
@@ -312,16 +317,56 @@ def resumen_fotos(conn, id_: str) -> dict | None:
     }
 
 
+# Dos fotos son la misma si sus huellas difieren en pocos bits y su contenido es casi idéntico:
+# la huella sola puede coincidir en fotos distintas pero muy simples (una pared blanca).
+MISMA_FOTO_BITS = 6
+MISMA_FOTO_COS = 0.95
+
+
+def registrar_foto(conn, f: dict, inmueble: str) -> tuple[str, str | None]:
+    """Guarda una foto analizada sin duplicar. Devuelve (huella canónica, archivo que sobra en el NAS)."""
+    gemela = conn.execute("""
+        SELECT huella, archivo, ancho * alto AS area FROM imagen
+        WHERE bit_count(('x' || huella)::bit(64) # ('x' || %(h)s)::bit(64)) <= %(bits)s
+          AND (SELECT sum(x * y) FROM unnest(emb, %(emb)s::real[]) AS t(x, y)) >= %(cos)s
+        ORDER BY bit_count(('x' || huella)::bit(64) # ('x' || %(h)s)::bit(64)) LIMIT 1""",
+        {"h": f["huella"], "emb": f["emb"], "bits": MISMA_FOTO_BITS, "cos": MISMA_FOTO_COS}).fetchone()
+    sobra = None
+    if gemela is None:
+        conn.execute("""INSERT INTO imagen (huella, emb, espacio, etiquetas, ancho, alto, archivo)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (huella) DO NOTHING""",
+                     (f["huella"], f["emb"], f["espacio"], json.dumps(f["etiquetas"]), f["ancho"], f["alto"], f["archivo"]))
+        canonica = f["huella"]
+    else:
+        canonica = gemela["huella"]
+        if f["archivo"] != gemela["archivo"]:
+            if f["ancho"] * f["alto"] > (gemela["area"] or 0):
+                # Llegó una copia más grande: se queda su archivo y sobra el anterior.
+                conn.execute("UPDATE imagen SET archivo = %s, ancho = %s, alto = %s WHERE huella = %s",
+                             (f["archivo"], f["ancho"], f["alto"], canonica))
+                sobra = gemela["archivo"]
+            else:
+                sobra = f["archivo"]
+    conn.execute("""INSERT INTO foto_url (url, huella, inmueble) VALUES (%s, %s, %s)
+                    ON CONFLICT (url) DO UPDATE SET huella = EXCLUDED.huella, visto = now()""",
+                 (f["url"], canonica, inmueble))
+    return canonica, sobra
+
+
 def analizar_fotos(conn, i: dict) -> None:
-    urls = [u for u in (i["imagenes"] or []) if u]
+    """Analiza solo las URLs que aún no se conocen; las fotos repetidas se funden en una."""
+    conocidas = {r["url"] for r in conn.execute("SELECT url FROM foto_url WHERE inmueble = %s", (i["id"],))}
+    urls = [u for u in (i["imagenes"] or []) if u and u not in conocidas]
     if not urls:
         return
     r = externos.vision("/analizar", {"urls": urls})
+    sobrantes = []
     for f in (r or {}).get("fotos", []):
-        conn.execute("""INSERT INTO foto (url, inmueble, espacio, etiquetas, emb) VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (url) DO UPDATE SET espacio = EXCLUDED.espacio, etiquetas = EXCLUDED.etiquetas,
-                          emb = EXCLUDED.emb, analizada = now()""",
-                     (f["url"], i["id"], f["espacio"], json.dumps(f["etiquetas"]), f["emb"]))
+        _, sobra = registrar_foto(conn, f, i["id"])
+        if sobra:
+            sobrantes.append(sobra)
+    if sobrantes:
+        externos.vision("/borrar", {"archivos": sobrantes})
 
 
 def puntuar(id_: str) -> None:
@@ -351,7 +396,6 @@ def puntuar(id_: str) -> None:
                                  (d["descripcion"], d["imagenes"] or i["imagenes"], facilidades, id_))
                     i["descripcion"], i["imagenes"] = d["descripcion"] or i["descripcion"], d["imagenes"] or i["imagenes"]
                     i["facilidades"] = facilidades
-                    conn.execute("DELETE FROM foto WHERE inmueble = %s", (id_,))  # la portada vieja daba 403
                 ext = {**ext, "detalle": bool(d)}
                 conn.execute("UPDATE inmueble SET externos = %s WHERE id = %s", (json.dumps(ext), id_))
                 i["externos"] = ext
@@ -366,8 +410,7 @@ def puntuar(id_: str) -> None:
             r = evaluar(i, ctx, cfg)
             # Fotos solo para quien ya está cerca del umbral: son la consulta más cara.
             if r["puntaje"] >= cfg["avisos"]["umbral"] - cfg["avisos"].get("margen_fotos", 15):
-                if not conn.execute("SELECT 1 FROM foto WHERE inmueble = %s LIMIT 1", (id_,)).fetchone():
-                    analizar_fotos(conn, i)
+                analizar_fotos(conn, i)
         ctx["fotos"] = resumen_fotos(conn, id_)
         r = evaluar(i, ctx, cfg)
         conn.execute("""UPDATE inmueble SET sector = %s, localidad = %s, tm_m = %s, tiempo_min = %s,
@@ -470,6 +513,22 @@ def comprobar_retirados(conn, limite: int = 30) -> int:
     return retirados
 
 
+def purgar_fotos(conn, dias: int = 180) -> int:
+    """Borra del NAS las fotos que ya no sirven: sin etiqueta y cuyos anuncios están todos retirados
+    hace más de `dias` días (o ya no existen). Las etiquetadas se quedan: son el material de entrenamiento."""
+    filas = conn.execute("""
+        DELETE FROM imagen im
+        WHERE NOT EXISTS (SELECT 1 FROM etiqueta_img e WHERE e.huella = im.huella)
+          AND NOT EXISTS (SELECT 1 FROM foto_url fu JOIN inmueble i ON i.id = fu.inmueble
+                          WHERE fu.huella = im.huella
+                            AND (i.retirado IS NULL OR i.retirado > now() - make_interval(days => %s)))
+        RETURNING archivo""", (dias,)).fetchall()
+    archivos = [f["archivo"] for f in filas if f["archivo"]]
+    if archivos:
+        externos.vision("/borrar", {"archivos": archivos})
+    return len(archivos)
+
+
 def vigilante() -> None:
     while True:
         time.sleep(3600)
@@ -478,6 +537,9 @@ def vigilante() -> None:
                 n = comprobar_retirados(conn)
                 if n:
                     log.info("%s anuncios comprobados como retirados", n)
+                n = purgar_fotos(conn)
+                if n:
+                    log.info("%s fotos viejas borradas del NAS", n)
                 for clave, mensaje in problemas(conn):
                     ya = conn.execute("SELECT 1 FROM aviso_salud WHERE clave = %s AND enviado > now() - interval '24 hours'",
                                       (clave,)).fetchone()
@@ -602,26 +664,29 @@ def fuentes() -> list[dict]:
 
 @app.get("/api/etiquetar/siguiente")
 def siguiente(cabeza: str) -> dict:
-    """La foto más dudosa para esa cabeza que todavía no tiene etiqueta."""
+    """La foto más dudosa para esa cabeza que todavía no tiene etiqueta. Se sirve desde el NAS, así
+    que sigue disponible aunque el anuncio ya no exista."""
     cfg = yaml.safe_load((db.CONFIG_DIR / "vision.yaml").read_text())
     if cabeza not in cfg["cabezas"]:
         raise HTTPException(status_code=404)
     with db.connect() as conn:
         f = conn.execute("""
-            SELECT f.url, f.inmueble, f.espacio, f.etiquetas->%(c)s AS pred
-            FROM foto f LEFT JOIN etiqueta e ON e.url = f.url AND e.cabeza = %(c)s
-            WHERE e.url IS NULL AND f.etiquetas ? %(c)s
-            ORDER BY (SELECT max(v::float) FROM jsonb_each_text(f.etiquetas->%(c)s) AS t(k, v)) ASC
+            SELECT im.huella, 'fotos/' || im.archivo AS url, im.espacio, im.etiquetas->%(c)s AS pred,
+                   (SELECT inmueble FROM foto_url fu WHERE fu.huella = im.huella LIMIT 1) AS inmueble,
+                   (SELECT count(*) FROM foto_url fu WHERE fu.huella = im.huella) AS copias
+            FROM imagen im LEFT JOIN etiqueta_img e ON e.huella = im.huella AND e.cabeza = %(c)s
+            WHERE e.huella IS NULL AND im.etiquetas ? %(c)s
+            ORDER BY (SELECT max(v::float) FROM jsonb_each_text(im.etiquetas->%(c)s) AS t(k, v)) ASC
             LIMIT 1""", {"c": cabeza}).fetchone()
-        hechas = conn.execute("SELECT count(*) AS n FROM etiqueta WHERE cabeza = %s", (cabeza,)).fetchone()["n"]
+        hechas = conn.execute("SELECT count(*) AS n FROM etiqueta_img WHERE cabeza = %s", (cabeza,)).fetchone()["n"]
     return {"foto": f, "clases": cfg["cabezas"][cabeza]["clases"], "etiquetadas": hechas}
 
 
 @app.post("/api/etiquetas")
 def etiquetar(cuerpo: dict) -> dict:
     with db.connect() as conn:
-        conn.execute("""INSERT INTO etiqueta (url, cabeza, clase) VALUES (%(url)s, %(cabeza)s, %(clase)s)
-                        ON CONFLICT (url, cabeza) DO UPDATE SET clase = EXCLUDED.clase, creada = now()""", cuerpo)
+        conn.execute("""INSERT INTO etiqueta_img (huella, cabeza, clase) VALUES (%(huella)s, %(cabeza)s, %(clase)s)
+                        ON CONFLICT (huella, cabeza) DO UPDATE SET clase = EXCLUDED.clase, creada = now()""", cuerpo)
     return {"ok": True}
 
 
@@ -629,23 +694,70 @@ def etiquetar(cuerpo: dict) -> dict:
 def entrenar() -> dict:
     """Entrena con las etiquetas, reclasifica todas las fotos guardadas y repuntúa."""
     with db.connect() as conn:
-        filas = conn.execute("""SELECT e.cabeza, e.clase, f.emb FROM etiqueta e JOIN foto f ON f.url = e.url""").fetchall()
+        filas = conn.execute("""SELECT e.cabeza, e.clase, im.emb FROM etiqueta_img e
+                                JOIN imagen im ON im.huella = e.huella""").fetchall()
         ejemplos: dict = {}
         for r in filas:
             ejemplos.setdefault(r["cabeza"], []).append({"emb": r["emb"], "clase": r["clase"]})
         informe = externos.vision("/entrenar", {"ejemplos": ejemplos})
         if informe is None:
             raise HTTPException(status_code=503, detail="servicio de visión no disponible")
-        fotos = conn.execute("SELECT url, emb FROM foto WHERE emb IS NOT NULL").fetchall()
-        for lote in range(0, len(fotos), 200):
-            r = externos.vision("/clasificar", {"fotos": fotos[lote:lote + 200]}) or {"fotos": []}
-            for f in r["fotos"]:
-                conn.execute("UPDATE foto SET espacio = %s, etiquetas = %s WHERE url = %s",
-                             (f["espacio"], json.dumps(f["etiquetas"]), f["url"]))
-        ids = [r["inmueble"] for r in conn.execute("SELECT DISTINCT inmueble FROM foto")]
+        reclasificar_imagenes(conn)
+        ids = [r["inmueble"] for r in conn.execute("SELECT DISTINCT inmueble FROM foto_url")]
     for id_ in ids:
         pendientes.put(id_)
     return {"cabezas": informe, "repuntuando": len(ids)}
+
+
+def reclasificar_imagenes(conn) -> None:
+    fotos = conn.execute("SELECT huella AS url, emb FROM imagen WHERE emb IS NOT NULL").fetchall()
+    for lote in range(0, len(fotos), 200):
+        r = externos.vision("/clasificar", {"fotos": fotos[lote:lote + 200]}) or {"fotos": []}
+        for f in r["fotos"]:
+            conn.execute("UPDATE imagen SET espacio = %s, etiquetas = %s WHERE huella = %s",
+                         (f["espacio"], json.dumps(f["etiquetas"]), f["url"]))
+
+
+@app.post("/api/migrar-fotos", dependencies=[Depends(autorizado)])
+def migrar_fotos() -> dict:
+    """Paso único: lleva las fotos y etiquetas del esquema por URL (foto, etiqueta) al de huellas
+    (imagen, foto_url, etiqueta_img), descargando cada foto una vez para calcular su huella y
+    guardarla en el NAS. Idempotente; borra las tablas viejas solo si todo cuadra."""
+    with db.connect() as conn:
+        if not conn.execute("SELECT to_regclass('foto') AS t").fetchone()["t"]:
+            return {"estado": "ya migrado"}
+        por_inmueble: dict = {}
+        for r in conn.execute("SELECT url, inmueble FROM foto WHERE url NOT IN (SELECT url FROM foto_url)"):
+            por_inmueble.setdefault(r["inmueble"], []).append(r["url"])
+        sobrantes, fallidas = [], 0
+        for inmueble, urls in por_inmueble.items():
+            r = externos.vision("/analizar", {"urls": urls}) or {"fotos": []}
+            fallidas += len(urls) - len(r["fotos"])
+            for f in r["fotos"]:
+                _, sobra = registrar_foto(conn, f, inmueble)
+                if sobra:
+                    sobrantes.append(sobra)
+        if sobrantes:
+            externos.vision("/borrar", {"archivos": sobrantes})
+        # Etiquetas: de la URL a su foto real. Si dos copias tenían etiquetas distintas gana la más reciente.
+        movidas = conn.execute("""
+            INSERT INTO etiqueta_img (huella, cabeza, clase, creada)
+            SELECT DISTINCT ON (fu.huella, e.cabeza) fu.huella, e.cabeza, e.clase, e.creada
+            FROM etiqueta e JOIN foto_url fu ON fu.url = e.url
+            ORDER BY fu.huella, e.cabeza, e.creada DESC
+            ON CONFLICT (huella, cabeza) DO NOTHING""").rowcount
+        resumen = conn.execute("""SELECT (SELECT count(*) FROM foto) AS urls_antes, (SELECT count(*) FROM foto_url) AS urls,
+                                         (SELECT count(*) FROM imagen) AS fotos_reales,
+                                         (SELECT count(*) FROM etiqueta) AS etiquetas_antes,
+                                         (SELECT count(*) FROM etiqueta_img) AS etiquetas_ahora,
+                                         (SELECT count(*) FROM etiqueta e LEFT JOIN foto_url fu ON fu.url = e.url
+                                            LEFT JOIN etiqueta_img ei ON ei.huella = fu.huella AND ei.cabeza = e.cabeza
+                                          WHERE ei.huella IS NULL) AS etiquetas_perdidas""").fetchone()
+        completo = resumen["etiquetas_perdidas"] == 0 and fallidas == 0
+        if completo:
+            conn.execute("DROP TABLE etiqueta; DROP TABLE foto;")
+        reclasificar_imagenes(conn)
+    return {**resumen, "fallidas": fallidas, "etiquetas_movidas": movidas, "tablas_viejas_borradas": completo}
 
 
 @app.get("/etiquetar")

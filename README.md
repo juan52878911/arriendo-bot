@@ -78,6 +78,24 @@ Gmail, una contraseña de aplicación) en `.env`. Cada 30 minutos se leen los co
 de los últimos 7 días, se sacan los enlaces a anuncios y los que el sistema no conocía se abren y
 entran al mismo flujo. Solo lectura: no marca ni borra correos.
 
+## Dónde se guarda cada cosa
+
+| Qué | Dónde | Por qué |
+|---|---|---|
+| Fotos (una por foto real, WebP ≤1024 px) | NAS `/data/fotos/<aa>/<huella>.webp` | Lo único que puede crecer de verdad |
+| Modelo de visión (~780 MB) y cabezas entrenadas | NAS `/data/modelos` | Pesado y fuera de la imagen de Docker |
+| Respaldos diarios (PostGIS y Fredy, 14 días) | NAS `/data/respaldos` | |
+| PostGIS y SQLite de Fredy | Disco local del LXC | Las bases de datos sobre NFS se corrompen con los bloqueos; sus respaldos ya van al NAS |
+| Imágenes de Docker | Disco local del LXC | Docker no funciona sobre NFS; limpieza semanal en `servidor/docker-limpieza` |
+
+**Fotos sin duplicados.** Cada foto descargada recibe una huella visual (dHash de 64 bits) que no
+cambia al redimensionarla ni recomprimirla. Si una foto nueva difiere de otra ya guardada en 6 bits
+o menos y su contenido (vector SigLIP) coincide en un 95 % o más, es la misma foto: se guarda un solo
+archivo (el de mayor resolución), cada URL de cada portal apunta a él y las etiquetas van a la foto,
+no a la URL. Las URLs ya vistas no se vuelven a descargar. Las fotos sin etiquetar de anuncios
+retirados hace más de 180 días se borran del NAS; las etiquetadas se quedan como material de
+entrenamiento.
+
 ## Enseñarle a ver las fotos
 
 Las cabezas empiezan "zero-shot" (comparan la foto con frases). En `http://<servidor>:8000/etiquetar`

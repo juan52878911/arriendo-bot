@@ -124,24 +124,6 @@ CREATE TABLE IF NOT EXISTS precio (
   PRIMARY KEY (inmueble, visto)
 );
 
--- Visión: un vector por foto (SigLIP) y lo que dicen las cabezas; etiquetas puestas a mano.
-CREATE TABLE IF NOT EXISTS foto (
-  url        text PRIMARY KEY,
-  inmueble   text NOT NULL REFERENCES inmueble (id) ON DELETE CASCADE,
-  espacio    text,
-  etiquetas  jsonb,
-  emb        real[],
-  analizada  timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS foto_inmueble ON foto (inmueble);
-
-CREATE TABLE IF NOT EXISTS etiqueta (
-  url     text NOT NULL REFERENCES foto (url) ON DELETE CASCADE,
-  cabeza  text NOT NULL,
-  clase   text NOT NULL,
-  creada  timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (url, cabeza)
-);
 
 -- Zona alcanzable en transporte público (isócrona), para el mapa.
 CREATE TABLE IF NOT EXISTS isocrona (
@@ -177,4 +159,35 @@ CREATE TABLE IF NOT EXISTS correo (
   recibido  timestamptz,
   enlaces   int,
   leido     timestamptz NOT NULL DEFAULT now()
+);
+
+-- Fotos sin duplicados: una fila por foto real, identificada por su huella visual (dHash), con su
+-- archivo en el NAS. Cada URL de cada portal apunta a su imagen; las etiquetas van a la imagen, así
+-- que etiquetar una foto cubre todas sus copias.
+CREATE TABLE IF NOT EXISTS imagen (
+  huella     text PRIMARY KEY,               -- dHash de 64 bits en hexadecimal
+  emb        real[],
+  espacio    text,
+  etiquetas  jsonb,
+  ancho      int,
+  alto       int,
+  archivo    text,                           -- ruta relativa en /data/fotos
+  creada     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS foto_url (
+  url       text PRIMARY KEY,
+  huella    text NOT NULL REFERENCES imagen (huella) ON DELETE CASCADE ON UPDATE CASCADE,
+  inmueble  text NOT NULL REFERENCES inmueble (id) ON DELETE CASCADE,
+  visto     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS foto_url_inmueble ON foto_url (inmueble);
+CREATE INDEX IF NOT EXISTS foto_url_huella ON foto_url (huella);
+
+CREATE TABLE IF NOT EXISTS etiqueta_img (
+  huella  text NOT NULL REFERENCES imagen (huella) ON DELETE CASCADE ON UPDATE CASCADE,
+  cabeza  text NOT NULL,
+  clase   text NOT NULL,
+  creada  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (huella, cabeza)
 );
