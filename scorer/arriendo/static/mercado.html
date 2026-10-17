@@ -13,7 +13,7 @@
   h1 { font-size:20px; margin:0 0 4px; font-weight:600; } h2 { font-size:16px; margin:24px 0 8px; font-weight:600; }
   .muted { color:var(--muted); font-size:13px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; overflow-x:auto; }
   .card h3 { font-size:14px; margin:0 0 6px; font-weight:600; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   td, th { text-align:left; padding:3px 6px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
@@ -40,9 +40,28 @@ const tarjeta = (titulo, cuerpo, nota) => `<div class="card"><h3>${titulo}</h3>$
 const grupos = s => (s && (s.groups || s.stats || s.rows)) || [];
 
 async function cargar() {
-  const m = await (await fetch('api/metricas?dias=60')).json();
+  const [m, t] = await Promise.all([(await fetch('api/metricas?dias=60')).json(), (await fetch('api/para-ti')).json()]);
   const a = m.analisis || {};
   const html = [];
+  const peso = n => n == null ? '—' : '$' + Math.round(n).toLocaleString('es-CO');
+  const c = t.criterios;
+  const enTope = (t.sensibilidad.find(x => x.tope === c.tope) || {}).opciones ?? 0;
+  html.push(`<h2>Para tu búsqueda</h2><p class="muted">${c.habitaciones}+ habitaciones, ${c.banos}+ baños, hasta ${peso(c.tope)} con administración, ≤ ${c.tiempo_max} min al destino. Hoy hay <b>${enTope}</b> opciones activas que lo cumplen.</p><div class="grid">`);
+  html.push(tarjeta('¿Y si mueves el presupuesto?', tabla(t.sensibilidad, [['hasta', f => peso(f.tope)], ['opciones', f => f.opciones, 'num'],
+    ['', f => `<span class="barra" style="width:${Math.round(100 * f.opciones / Math.max(...t.sensibilidad.map(x => x.opciones), 1))}px"></span>`]]).replace(/&lt;span class=&quot;barra&quot; style=&quot;width:(\d+)px&quot;&gt;&lt;\/span&gt;/g, '<span class="barra" style="width:$1px"></span>'),
+    `Aceptando 1 baño, con tu presupuesto habría ${t.con_un_bano} opciones.`));
+  html.push(tarjeta('Precio de 3 hab + 2 baños por localidad', tabla(t.por_localidad, [['localidad', f => f.localidad], ['n', f => f.n, 'num'],
+    ['p25', f => peso(f.p25), 'num'], ['mediana', f => peso(f.mediana), 'num'], ['m²', f => f.m2, 'num'], ['en presupuesto', f => f.pct_en_presupuesto + '%', 'num']]),
+    'p25: el 25 % más barato cuesta esto o menos. "En presupuesto": qué parte de la oferta de esa localidad cabe en tu tope.'));
+  html.push(tarjeta('Qué compra tu presupuesto (3+ hab)', tabla(t.que_compra, [['', f => f.dentro ? 'dentro del tope' : 'por encima'],
+    ['anuncios', f => f.n, 'num'], ['m² mediano', f => f.m2, 'num'], ['estrato típico', f => f.estrato, 'num']])));
+  html.push(tarjeta('Barrios con más opciones en presupuesto', tabla(t.barrios, [['barrio', f => f.barrio], ['en presupuesto', f => f.en_presupuesto, 'num'],
+    ['de', f => f.n, 'num'], ['mediana', f => peso(f.mediana), 'num'], ['puntaje', f => f.puntaje, 'num'], ['tranquilo %', f => f.tranquilo ?? '—', 'num']])));
+  html.push(tarjeta('Con quién hablar', tabla(t.anunciantes, [['anunciante', f => f.anunciante ?? '—'], ['3+ hab en presupuesto', f => f.n, 'num']]),
+    `Bajadas de precio vistas: ${t.bajadas.n}, en promedio ${t.bajadas.pct_promedio ?? '—'} %: margen para negociar.`));
+  html.push(tarjeta('Oferta nueva que cumple todo', tabla(t.oferta_diaria, [['día', f => f.dia], ['nuevas', f => f.n, 'num']]),
+    'El primer día incluye lo que ya estaba publicado al arrancar.'));
+  html.push('</div>');
   html.push('<h2>Lo que dice chrono</h2><div class="grid">');
   html.push(tarjeta('Horas de más publicaciones', a.horas_pico && a.horas_pico.length
     ? `<p><b>${a.horas_pico.map(h => h + ':00').join(', ')}</b></p>` : '<p class="muted">Todavía sin datos suficientes.</p>',

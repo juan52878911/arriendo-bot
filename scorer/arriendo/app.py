@@ -882,6 +882,12 @@ def leer_analisis() -> dict | None:
         return None
 
 
+@app.get("/api/para-ti")
+def para_ti() -> dict:
+    with db.connect() as conn:
+        return mercado.para_ti(conn, db.config())
+
+
 @app.get("/api/resumen")
 def ver_resumen() -> dict:
     with db.connect() as conn:

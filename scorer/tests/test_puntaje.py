@@ -130,3 +130,9 @@ def test_sospecha_de_texto_copiado_alerta_y_republicacion_explica():
     assert any("anunciante sea real" in a for a in copia["alertas"])
     repub = evaluar(base(), {"sospechas": [{"parecido": "x:2", "motivo": "republicación del mismo apartamento", "retirado": True}]}, CFG)
     assert any("se volvió a publicar" in a for a in repub["alertas"])
+
+
+def test_descarta_oficinas_que_vienen_en_busquedas_de_apartamentos():
+    r = evaluar(base(titulo="Oficina en arriendo en Ortezal", descripcion=""), {}, CFG)
+    assert any("no es vivienda" in d for d in r["descartes"])
+    assert not evaluar(base(titulo="Apartamento en arriendo en Ortezal"), {}, CFG)["descartes"]

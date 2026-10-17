@@ -183,3 +183,57 @@ def resumen(conn, analisis: dict | None) -> str:
         lineas.append("")
         lineas += [f'• <a href="{e(m["url"])}">{m["p"]:.0f}/100 · {e(m["zona"])} · {_pesos(m["total"])}</a>' for m in mejores]
     return "\n".join(lineas)
+
+
+# Análisis para la búsqueda concreta ----------------------------------------------------------
+
+def para_ti(conn, cfg: dict) -> dict:
+    """Lo que el mercado ofrece para tus criterios (config.yaml): dónde, a qué precio, qué cambia si
+    mueves el presupuesto o aceptas un baño, cuánta oferta nueva sale y con quién hablar."""
+    b = cfg["busqueda"]
+    tope, hab, banos = b["canon_total_max"], b["habitaciones_min"], b["banos_min"]
+    excluidas = [str(x).upper() for x in b.get("localidades_excluidas", [])]
+    base = """FROM inmueble i LEFT JOIN sector s ON s.codigo = i.sector
+              WHERE i.duplicado_de IS NULL AND i.retirado IS NULL AND i.geom IS NOT NULL
+                AND upper(unaccent(coalesce(i.localidad, ''))) <> ALL(%(excl)s)
+                AND i.total BETWEEN 500000 AND 30000000
+                AND NOT (lower(i.url || ' ' || coalesce(i.titulo, '')) ~ '(oficina|local|bodega|consultorio)'
+                         AND lower(i.url || ' ' || coalesce(i.titulo, '')) !~ 'apartamento')"""
+    p = {"excl": excluidas or [""], "tope": tope, "hab": hab, "banos": banos}
+    q = lambda sql: conn.execute(sql, p).fetchall()
+    return {
+        "criterios": {"tope": tope, "habitaciones": hab, "banos": banos, "tiempo_max": b["tiempo_max_min"]},
+        "por_localidad": q(f"""SELECT coalesce(i.localidad, '?') AS localidad, count(*) AS n,
+                                 percentile_cont(0.25) WITHIN GROUP (ORDER BY total)::int AS p25,
+                                 percentile_cont(0.5) WITHIN GROUP (ORDER BY total)::int AS mediana,
+                                 percentile_cont(0.5) WITHIN GROUP (ORDER BY area)::int AS m2,
+                                 round(100.0 * count(*) FILTER (WHERE total <= %(tope)s) / count(*)) AS pct_en_presupuesto
+                               {base} AND habitaciones >= %(hab)s AND banos >= %(banos)s
+                               GROUP BY 1 HAVING count(*) >= 4 ORDER BY mediana"""),
+        "sensibilidad": q(f"""SELECT t.tope, count(i.id) AS opciones
+                              FROM (SELECT unnest(ARRAY[%(tope)s - 200000, %(tope)s, %(tope)s + 200000, %(tope)s + 400000,
+                                                       %(tope)s + 600000, %(tope)s + 900000]) AS tope) t
+                              LEFT JOIN LATERAL (SELECT i.id {base} AND habitaciones >= %(hab)s AND banos >= %(banos)s
+                                                   AND total <= t.tope AND coalesce(tiempo_min, 0) <= {b['tiempo_max_min']}) i ON true
+                              GROUP BY 1 ORDER BY 1"""),
+        "con_un_bano": q(f"""SELECT count(*) AS n {base} AND habitaciones >= %(hab)s AND banos >= 1 AND total <= %(tope)s""")[0]["n"],
+        "que_compra": q(f"""SELECT total <= %(tope)s AS dentro, count(*) AS n,
+                              percentile_cont(0.5) WITHIN GROUP (ORDER BY area)::int AS m2,
+                              percentile_cont(0.5) WITHIN GROUP (ORDER BY coalesce(estrato, 0))::int AS estrato
+                            {base} AND habitaciones >= %(hab)s GROUP BY 1 ORDER BY 1 DESC"""),
+        "barrios": q(f"""SELECT coalesce(s.nombre, i.barrio_portal) AS barrio, i.localidad, count(*) AS n,
+                           count(*) FILTER (WHERE total <= %(tope)s AND banos >= %(banos)s
+                                              AND coalesce(cardinality(descartes), 0) = 0) AS en_presupuesto,
+                           percentile_cont(0.5) WITHIN GROUP (ORDER BY total)::int AS mediana,
+                           round(avg(puntaje)) AS puntaje, round(100 * (1 - max(s.seguridad_pct))) AS tranquilo
+                         {base} AND habitaciones >= %(hab)s GROUP BY 1, 2 HAVING count(*) >= 3
+                         ORDER BY en_presupuesto DESC, avg(puntaje) DESC LIMIT 15"""),
+        "oferta_diaria": q("""SELECT visto_primero::date AS dia, count(*) AS n FROM inmueble
+                              WHERE coalesce(cardinality(descartes), 0) = 0 AND duplicado_de IS NULL
+                                AND visto_primero >= now() - interval '21 days' GROUP BY 1 ORDER BY 1"""),
+        "anunciantes": q(f"""SELECT {ANUNCIANTE} AS anunciante, count(*) AS n
+                             {base} AND habitaciones >= %(hab)s AND total <= %(tope)s GROUP BY 1 ORDER BY 2 DESC LIMIT 6"""),
+        "bajadas": q("""SELECT count(*) AS n, round(avg(100.0 * (antes - total) / antes), 1) AS pct_promedio
+                        FROM (SELECT total, lag(total) OVER (PARTITION BY inmueble ORDER BY visto) AS antes FROM precio) p
+                        WHERE antes IS NOT NULL AND total < antes""")[0],
+    }

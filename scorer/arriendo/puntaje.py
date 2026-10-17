@@ -1,5 +1,6 @@
 """Filtros duros y puntaje 0-100 de un inmueble, con el detalle de cada componente."""
 
+import re
 import unicodedata
 
 
@@ -34,6 +35,10 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
     descartes, alertas, detalle = [], [], {}
 
     # Filtros duros ------------------------------------------------------------------------
+    # Las búsquedas de "apartamento" de algunos portales (Ciencuadras) también devuelven oficinas y locales.
+    tipo = sin_tildes(f"{i.get('url') or ''} {i.get('titulo') or ''}")
+    if re.search(r"\b(oficina|local|bodega|consultorio|lote|parqueadero)\b", tipo) and "apartamento" not in tipo:
+        descartes.append("no es vivienda (oficina, local o similar)")
     habitaciones = i.get("habitaciones")
     falsas = _palabras(texto, b.get("habitacion_falsa", []))
     if falsas and habitaciones:
