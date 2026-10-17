@@ -291,29 +291,67 @@ def comparacion_personal(conn, priv: dict | None, ref: dict | None) -> dict | No
 
 
 def por_pago(conn, priv: dict | None) -> dict | None:
-    """Para cada nivel de lo que pagas tú: cuántos apartamentos le ganan al tuyo, el mejor de ellos y
-    lo que te cuesta frente a hoy (al mes, al año y en meses de ahorro para una cuota inicial)."""
+    """Escenarios: para cada aporte posible del roomie y cada nivel de tu parte (cómodo, máximo, límite
+    y el máximo futuro), cuántos apartamentos mejores que el tuyo caben y cuáles son los mejores."""
     if not priv:
         return None
-    ing, actual = priv["ingresos"], priv["vivienda_actual"]
-    aporte, salario, hoy = ing.get("aporte_companero", 0), ing["salario_mensual"], ing.get("pago_ideal", actual["canon_total"])
-    niveles = sorted({hoy - 200000, hoy, hoy + 100000, hoy + 200000, hoy + 300000, ing.get("pago_max", hoy), hoy + 400000, hoy + 600000})
+    ing = priv["ingresos"]
+    niveles = [("cómodo", ing["pago_comodo"]), ("máximo", ing["pago_max"]), ("límite", ing["pago_limite"])]
+    if ing.get("futuro"):
+        niveles.append((f"desde {ing['futuro']['desde']}", ing["futuro"]["pago_max"]))
     filas = conn.execute("""
-        SELECT i.id, i.total, i.area, round(i.puntaje) AS puntaje, coalesce(s.nombre, i.barrio_portal) AS barrio, i.url,
-               jsonb_array_length(i.comparacion->'gana_en') AS gana
+        SELECT i.id, i.total, i.area, round(i.puntaje) AS puntaje, coalesce(s.nombre, i.barrio_portal) AS barrio, i.url
         FROM inmueble i LEFT JOIN sector s ON s.codigo = i.sector
-        WHERE i.duplicado_de IS NULL AND i.retirado IS NULL AND (i.comparacion->>'mejor_que_actual')::boolean""").fetchall()
-    cap = capacidad_compra(priv)
+        WHERE i.duplicado_de IS NULL AND i.retirado IS NULL AND (i.comparacion->>'mejor_que_actual')::boolean
+        ORDER BY i.puntaje DESC""").fetchall()
+    escenarios = []
+    for aporte in sorted(set(ing.get("escenarios_aporte", []) + [ing.get("aporte_companero", 0)])):
+        celdas = []
+        for nombre, pago in niveles:
+            tope = aporte + pago
+            aqui = [f for f in filas if f["total"] <= tope]
+            celdas.append({"nivel": nombre, "tu_parte": pago, "tope_total": tope, "opciones": len(aqui),
+                           "mejores": [{"barrio": f["barrio"], "total": f["total"], "area": f["area"], "puntaje": f["puntaje"],
+                                        "url": f["url"]} for f in aqui[:3]]})
+        escenarios.append({"aporte": aporte, "actual": aporte == ing.get("aporte_companero"), "niveles": celdas})
+    neto = ing.get("neto_mensual") or ing["salario_mensual"]
+    pres = priv.get("presupuesto", {})
+    return {"neto": neto, "niveles": [{"nivel": n, "pago": p, "pct_neto": round(100 * p / neto, 1)} for n, p in niveles],
+            "escenarios": escenarios, "presupuesto": {k: sum(v.values()) for k, v in pres.items()},
+            "nota": "Por encima del límite dejas de ahorrar o de pagar algo necesario. Si el roomie se va, el arriendo "
+                    "completo queda a tu nombre: pídele un ingreso de al menos 2,5 veces su parte."}
+
+
+def _direccion(texto: str | None) -> str:
+    """'Calle 80 # 10 - 43 Apto 402' → 'cl 80 10 43 apto 402', para comparar direcciones escritas distinto."""
+    import re
+    import unicodedata
+    t = unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode().lower()
+    t = re.sub(r"\b(avenida calle|av calle|calle|cll|cl)\b\.?", " cl ", t)
+    t = re.sub(r"\b(avenida carrera|av carrera|carrera|cra|kra|kr|cr|ak)\b\.?", " cr ", t)
+    t = re.sub(r"\b(no|n°|nº)\b\.?|[#\-,.]", " ", t)
+    t = re.sub(r"(\d)([a-z])\b", r"\1 \2", t)          # 80B → 80 b
+    return " ".join(t.split())
+
+
+def lista_corta(conn, priv: dict | None) -> list[dict]:
+    """Las direcciones de tu lista corta: si el sistema las ve, a qué precio, desde cuándo y si cambiaron."""
+    if not priv or not priv.get("lista_corta"):
+        return []
+    filas = conn.execute("""SELECT i.id, i.url, i.total, i.area, i.retirado, i.visto_primero, i.visto_ultimo, round(i.puntaje) AS puntaje,
+                                   i.comparacion, i.descartes, coalesce(i.crudo->>'address', '') AS direccion,
+                                   (SELECT count(*) FROM precio p WHERE p.inmueble = i.id) AS precios
+                            FROM inmueble i WHERE coalesce(i.crudo->>'address', '') <> ''""").fetchall()
+    for f in filas:
+        f["norm"] = _direccion(f["direccion"])
     salida = []
-    for n in niveles:
-        aqui = [f for f in filas if f["total"] - aporte <= n]
-        mejor = max(aqui, key=lambda f: (f["puntaje"] or 0), default=None)
-        extra = n - hoy
-        salida.append({
-            "pago": n, "total_arriendo": n + aporte, "pct_salario": round(100 * n / salario, 1),
-            "extra_mes": extra, "extra_anio": extra * 12,
-            "pct_cuota_inicial_anio": round(100 * extra * 12 / cap["cuota_inicial"], 1) if extra > 0 else 0,
-            "opciones": len(aqui), "area_mediana": sorted(f["area"] for f in aqui)[len(aqui) // 2] if aqui else None,
-            "mejor": mejor})
-    return {"hoy": hoy, "aporte": aporte, "salario": salario, "niveles": salida,
-            "regla": "hasta 30 % del salario en vivienda deja margen para ahorrar; por encima de 35 % se aprieta"}
+    for entrada in priv["lista_corta"]:
+        barrio, _, dir_ = entrada.partition(",")
+        clave = _direccion(dir_ or barrio)
+        hallados = [f for f in filas if clave and clave in f["norm"]]
+        salida.append({"entrada": entrada, "encontrado": bool(hallados), "anuncios": [
+            {k: f[k] for k in ("id", "url", "total", "area", "retirado", "visto_primero", "visto_ultimo", "puntaje", "precios")}
+            | {"nivel": (f["comparacion"] or {}).get("nivel"), "mejor_que_actual": (f["comparacion"] or {}).get("mejor_que_actual"),
+               "descartes": f["descartes"]}
+            for f in hallados]})
+    return salida

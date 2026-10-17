@@ -64,11 +64,26 @@ async function cargar() {
   html.push('</div>');
   const pp = t.por_pago;
   if (pp) {
-    html.push(`<h2>¿Cuánto pagar?</h2><p class="muted">Tu parte del arriendo (tu amigo pone ${peso(pp.aporte)}). Hoy pagas ${peso(pp.hoy)}, el ${(100 * pp.hoy / pp.salario).toFixed(0)} % de tu salario. Regla: ${pp.regla}. Solo cuentan apartamentos que le ganan al tuyo en seguridad y en lo demás.</p>`);
-    html.push(tabla(pp.niveles, [['tu pago', f => peso(f.pago)], ['% salario', f => f.pct_salario + ' %', 'num'],
-      ['vs hoy al mes', f => (f.extra_mes > 0 ? '+' : '') + peso(f.extra_mes), 'num'], ['al año', f => (f.extra_anio > 0 ? '+' : '') + peso(f.extra_anio), 'num'],
-      ['opciones mejores', f => f.opciones, 'num'], ['m² típico', f => f.area_mediana ? Math.round(f.area_mediana) : '—', 'num'],
-      ['la mejor', f => f.mejor ? `${f.mejor.puntaje} · ${f.mejor.barrio} · ${peso(f.mejor.total)}` : '—']]));
+    const pres = pp.presupuesto || {};
+    html.push(`<h2>¿Cuánto pagar?</h2><p class="muted">Neto ${peso(pp.neto)} · necesario ${peso(pres.necesario)} · gustos ${peso(pres.gustos)}. Tu parte del arriendo: ` +
+      pp.niveles.map(n => `<b>${n.nivel}</b> ${peso(n.pago)} (${n.pct_neto} %)`).join(' · ') + `. ${esc(pp.nota)}</p>`);
+    const cols = [['roomie pone', f => (f.actual ? '▶ ' : '') + peso(f.aporte)]].concat(pp.niveles.map((n, k) => [
+      `${n.nivel} (total ≤)`, f => { const c = f.niveles[k]; return `${peso(c.tope_total)} → ${c.opciones} opc.`; }, 'num']));
+    html.push(tabla(pp.escenarios, cols));
+    const actual = pp.escenarios.find(e => e.actual);
+    if (actual) html.push('<div class="grid" style="margin-top:12px">' + actual.niveles.map(c => tarjeta(
+      `${c.nivel}: tu parte ${peso(c.tu_parte)}, total ≤ ${peso(c.tope_total)}`,
+      c.mejores.length ? c.mejores.map(m => `<div><b>${m.puntaje}</b> · <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.barrio)}</a> · ${peso(m.total)} · ${Math.round(m.area)} m²</div>`).join('') : '<p class="muted">Nada mejor que tu apartamento a este nivel.</p>',
+      `${c.opciones} apartamentos le ganan al tuyo con este aporte del roomie.`)).join('') + '</div>');
+  }
+  if (t.lista_corta && t.lista_corta.length) {
+    html.push('<h2>Tu lista corta</h2>' + tabla(t.lista_corta.flatMap(l => l.anuncios.length ? l.anuncios.map(a => ({ l, a })) : [{ l, a: null }]), [
+      ['dirección', f => f.l.entrada],
+      ['estado', f => !f.a ? 'no aparece en los portales vigilados' : f.a.retirado ? 'retirado' : 'publicado'],
+      ['precio', f => f.a ? peso(f.a.total) : '—', 'num'],
+      ['nivel', f => f.a?.nivel ?? '—'], ['¿mejor que tu casa?', f => f.a ? (f.a.mejor_que_actual ? 'sí' : 'no') : '—'],
+      ['visto desde', f => f.a ? String(f.a.visto_primero).slice(0, 10) : '—'],
+      ['cambios de precio', f => f.a ? Math.max(0, f.a.precios - 1) : '—', 'num']]));
   }
   const pe = t.personal;
   if (pe) {

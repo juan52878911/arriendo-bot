@@ -21,8 +21,15 @@ def migrate() -> None:
 
 
 def config() -> dict:
-    """Se relee en cada uso: cambiar config.yaml no exige reiniciar."""
-    return yaml.safe_load((CONFIG_DIR / "config.yaml").read_text())
+    """Se relee en cada uso: cambiar config.yaml no exige reiniciar. Si existe privado.yaml, el tope del
+    arriendo total sale de tu presupuesto: tu límite más lo que aporta el roomie."""
+    cfg = yaml.safe_load((CONFIG_DIR / "config.yaml").read_text())
+    priv = CONFIG_DIR / "privado.yaml"
+    if priv.exists():
+        ing = (yaml.safe_load(priv.read_text()) or {}).get("ingresos", {})
+        if ing.get("pago_limite") is not None:
+            cfg["busqueda"]["canon_total_max"] = ing["pago_limite"] + ing.get("aporte_companero", 0)
+    return cfg
 
 
 def fuentes() -> list[dict]:

@@ -10,10 +10,22 @@ vivienda_actual:
   problemas: [inseguridad, ruido de vecinos, peleas, cortes de agua, cortes de luz, cortes de internet]
 
 ingresos:
-  salario_mensual: 4000000
-  aporte_companero: 0             # lo que pone quien comparte contigo
-  pago_ideal: 800000                # lo que pagas hoy y puedes pagar sin pensarlo
-  pago_max: 1000000                 # tope de tu parte del arriendo
+  salario_mensual: 4000000          # bruto (lo usa la estimación de compra)
+  neto_mensual: 3700000
+  aporte_companero: 0               # lo que pone quien comparte contigo
+  pago_comodo: 900000               # tu parte del arriendo con holgura para ahorrar
+  pago_max: 1000000                 # cubriendo lo necesario y tus gustos
+  pago_limite: 1100000              # recortando gustos; por encima dejas de ahorrar
+  escenarios_aporte: [0, 500000, 800000]
+  futuro:
+    desde: 2027-01
+    pago_max: 1200000
+
+presupuesto:
+  necesario: {comida: 600000, transporte: 150000, ahorro_minimo: 370000}
+  gustos: {ocio: 200000}
+
+lista_corta: []
 
 compra:                             # supuestos para estimar si podrías comprar; verifica la tasa con tu banco
   tasa_efectiva_anual: 12.5

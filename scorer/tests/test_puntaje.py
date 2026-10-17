@@ -144,7 +144,8 @@ def test_descarta_oficinas_que_vienen_en_busquedas_de_apartamentos():
 
 REF = {"tranquilo_pct": 8, "ruido_noche_db": 67.5, "pm25": 15, "tiempo_min": 70, "area_m2": 60,
        "canon_total": 1000000, "parqueadero": False}
-PRIV = {"ingresos": {"salario_mensual": 4000000, "aporte_companero": 800000, "pct_max_vivienda": 35},
+PRIV = {"ingresos": {"salario_mensual": 4000000, "neto_mensual": 4000000, "aporte_companero": 800000,
+                     "pago_comodo": 1000000, "pago_max": 1400000, "pago_limite": 1700000},
         "veredicto": {"mejora_seguridad_min": 20, "area_min_pct": 80, "dimensiones_min": 4}}
 
 
@@ -169,7 +170,8 @@ def test_veredicto_no_si_no_mejora_seguridad_o_no_alcanza():
 
 def test_mejor_que_actual_no_depende_del_precio():
     from arriendo.comparar import comparar
-    priv = {"ingresos": {"salario_mensual": 4000000, "aporte_companero": 800000, "pago_ideal": 1000000, "pago_max": 1500000},
+    priv = {"ingresos": {"salario_mensual": 4000000, "aporte_companero": 800000, "pago_comodo": 1000000,
+                         "pago_max": 1400000, "pago_limite": 1500000},
             "veredicto": {"mejora_seguridad_min": 20, "area_min_pct": 80, "dimensiones_min": 4}}
     i = base(total=2500000, area=72, tiempo_min=32)
     c = comparar(i, {"seguridad_pct": 0.3, "ruido_noche_db": 57.5, "pm25": 11}, evaluar(i, {}, CFG), REF, priv)

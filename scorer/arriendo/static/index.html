@@ -148,7 +148,7 @@ function pintar() {
         · ${i.sector_nombre ?? i.barrio_portal ?? ''} <span class="muted">${i.localidad ?? ''} · ${i.portal}</span><br>
         ${i.total ? peso(i.total) : ''} · ${i.area ?? '?'} m² · ${i.habitaciones ?? '?'} hab / ${i.banos ?? '?'} baños
         ${i.tiempo_min ? ' · ' + i.tiempo_min + ' min' : ''}
-        ${i.comparacion?.vale_la_pena ? `<div style="color:var(--accent);font-size:13px">✔ Le gana a tu apartamento en ${i.comparacion.gana_en.length} de ${i.comparacion.total_dimensiones} · pagarías $${Math.round(i.comparacion.pago_tuyo).toLocaleString('es-CO')} (${i.comparacion.pct_salario} %)</div>`
+        ${i.comparacion?.vale_la_pena ? `<div style="color:var(--accent);font-size:13px">✔ Le gana a tu apartamento en ${i.comparacion.gana_en.length} de ${i.comparacion.total_dimensiones} · tu parte $${Math.round(i.comparacion.pago_tuyo).toLocaleString('es-CO')} · nivel ${i.comparacion.nivel}</div>`
           : i.comparacion ? `<div class="muted">Frente a tu apartamento: ${i.comparacion.motivo}</div>` : ''}
         ${(i.alertas || []).filter(a => !a.startsWith('Le gana a tu apartamento')).map(a => `<div class="alerta">⚠ ${a}</div>`).join('')}
         ${motivos.length ? `<div class="muted">Fuera: ${motivos.join('; ')}</div>` : ''}

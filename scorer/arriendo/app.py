@@ -422,8 +422,8 @@ def puntuar(id_: str) -> None:
             conn.execute("UPDATE inmueble SET comparacion = %s WHERE id = %s", (json.dumps(comp), id_))
             if comp["vale_la_pena"]:
                 r["alertas"].insert(0, f"Le gana a tu apartamento actual en {len(comp['gana_en'])} de "
-                                       f"{comp['total_dimensiones']}: {', '.join(comp['gana_en'])}. Pagarías "
-                                       f"${comp['pago_tuyo']:,.0f} ({comp['pct_salario']} % de tu salario).".replace(",", "."))
+                                       f"{comp['total_dimensiones']}: {', '.join(comp['gana_en'])}. Tu parte: "
+                                       f"${comp['pago_tuyo']:,.0f}, nivel {comp['nivel']} ({comp['pct_salario']} % de tu neto).".replace(",", "."))
         conn.execute("""UPDATE inmueble SET sector = %s, localidad = %s, tm_m = %s, tiempo_min = %s,
                           tiempo_fuente = %s, puntaje = %s, detalle = %s, descartes = %s, alertas = %s,
                           duplicado_de = %s
@@ -896,6 +896,7 @@ def para_ti() -> dict:
         datos = mercado.para_ti(conn, db.config())
         datos["personal"] = mercado.comparacion_personal(conn, comparar.privado(), comparar.referencia(conn))
         datos["por_pago"] = mercado.por_pago(conn, comparar.privado())
+        datos["lista_corta"] = mercado.lista_corta(conn, comparar.privado())
         return datos
 
 
