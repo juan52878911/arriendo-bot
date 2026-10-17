@@ -900,6 +900,14 @@ def para_ti() -> dict:
         return datos
 
 
+@app.get("/api/recomendados")
+def ver_recomendados(dias: int = 30) -> dict:
+    with db.connect() as conn:
+        datos = mercado.recomendados(conn, comparar.privado(), dias)
+        datos["actual"] = comparar.referencia(conn)
+        return datos
+
+
 @app.get("/api/referencia")
 def ver_referencia(forzar: bool = False) -> dict:
     with db.connect() as conn:
@@ -922,6 +930,11 @@ def enviar_resumen() -> dict:
 @app.get("/mercado")
 def pagina_mercado() -> FileResponse:
     return FileResponse(Path(__file__).parent / "static" / "mercado.html")
+
+
+@app.get("/recomendados")
+def pagina_recomendados() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "recomendados.html")
 
 
 @app.get("/salud")

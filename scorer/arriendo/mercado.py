@@ -5,6 +5,7 @@
   (chrono calcula su SimHash para encontrar textos casi idénticos).
 - `registrar_metricas()` guarda cada día una foto de los números que dicen si un cambio mejoró algo.
 - `resumen()` arma el aviso semanal.
+- `registrar_recomendados()` y `recomendados()`: lo que le gana a tu apartamento, día a día.
 """
 
 import json
@@ -131,6 +132,7 @@ def registrar_metricas(conn, externas: dict | None = None) -> dict:
                         ON CONFLICT (dia, nombre, clave) DO UPDATE SET valor = EXCLUDED.valor""",
                      (hoy, nombre, clave, float(valor)))
         guardadas.setdefault(nombre, {})[clave] = round(float(valor), 2)
+    guardadas["recomendados"] = registrar_recomendados(conn)
     return guardadas
 
 
@@ -355,3 +357,69 @@ def lista_corta(conn, priv: dict | None) -> list[dict]:
                "descartes": f["descartes"]}
             for f in hallados]})
     return salida
+
+
+# Activos y sin duplicar que le ganan a tu apartamento (comparar.py). Los que se pasan de tu límite solo
+# cuentan hasta el tope que alcanzarías más adelante (ingresos.futuro): Fincaraíz trae el mercado entero.
+SUPERAN = """FROM inmueble i WHERE (i.comparacion->>'mejor_que_actual')::boolean
+             AND i.retirado IS NULL AND i.duplicado_de IS NULL
+             AND ((i.comparacion->>'vale_la_pena')::boolean OR i.total <= %(tope)s)"""
+
+
+def tope_supera(priv: dict | None) -> int:
+    """Total más alto que tiene sentido mostrar: tu máximo futuro (o tu límite) más lo que pone el roomie."""
+    ing = (priv or {}).get("ingresos", {})
+    tuyo = (ing.get("futuro") or {}).get("pago_max") or ing.get("pago_limite") or 0
+    return tuyo + ing.get("aporte_companero", 0)
+
+
+def registrar_recomendados(conn) -> dict:
+    """La foto de hoy: se borra y se rehace, así lo que sale durante el día no queda contado."""
+    from .comparar import privado
+    hoy = date.today()
+    conn.execute("DELETE FROM recomendacion WHERE dia = %s", (hoy,))
+    conn.execute(f"""INSERT INTO recomendacion (dia, inmueble, tipo, puntaje, total, pago, nivel, gana_en)
+                     SELECT %(hoy)s, i.id, CASE WHEN (i.comparacion->>'vale_la_pena')::boolean THEN 'recomendado' ELSE 'supera' END,
+                            i.puntaje, i.total, (i.comparacion->>'pago_tuyo')::bigint, i.comparacion->>'nivel',
+                            ARRAY(SELECT jsonb_array_elements_text(i.comparacion->'gana_en'))
+                     {SUPERAN}""", {"hoy": hoy, "tope": tope_supera(privado())})
+    return {r["tipo"]: r["n"] for r in conn.execute(
+        "SELECT tipo, count(*) AS n FROM recomendacion WHERE dia = %s GROUP BY tipo", (hoy,)).fetchall()}
+
+
+def recomendados(conn, priv: dict | None, dias: int = 30) -> dict:
+    """Lo que le gana a tu apartamento hoy, desde cuándo, y cómo ha cambiado la lista cada día."""
+    lista = conn.execute(f"""
+        SELECT i.id, i.portal, i.url, i.titulo, i.total, i.area, i.habitaciones, i.banos, i.estrato, i.parqueaderos,
+               round(i.puntaje) AS puntaje, i.tiempo_min, i.barrio_portal, i.localidad, i.comparacion, i.alertas,
+               (SELECT nombre FROM sector s WHERE s.codigo = i.sector) AS sector_nombre,
+               i.imagenes[1] AS foto, ST_Y(i.geom) AS lat, ST_X(i.geom) AS lon,
+               (SELECT min(dia) FROM recomendacion r WHERE r.inmueble = i.id) AS desde,
+               (SELECT count(*) FROM recomendacion r WHERE r.inmueble = i.id) AS dias,
+               (SELECT array_agg(total ORDER BY visto) FROM precio p WHERE p.inmueble = i.id) AS precios
+        {SUPERAN}
+        ORDER BY (i.comparacion->>'vale_la_pena')::boolean DESC, (i.comparacion->>'pago_tuyo')::bigint, i.puntaje DESC""",
+        {"tope": tope_supera(priv)}).fetchall()
+    serie = conn.execute("""SELECT dia, count(*) FILTER (WHERE tipo = 'recomendado') AS recomendados,
+                                   count(*) FILTER (WHERE tipo = 'supera') AS superan
+                            FROM recomendacion WHERE dia >= current_date - %s GROUP BY dia ORDER BY dia""", (dias,)).fetchall()
+    # Cambios entre el último día registrado y el anterior: qué entró y qué salió (y por qué).
+    ult = conn.execute("SELECT DISTINCT dia FROM recomendacion ORDER BY dia DESC LIMIT 2").fetchall()
+    entraron, salieron = [], []
+    if len(ult) == 2:
+        hoy, ayer = ult[0]["dia"], ult[1]["dia"]
+        entraron = [r["inmueble"] for r in conn.execute(
+            """SELECT inmueble FROM recomendacion WHERE dia = %(h)s
+               EXCEPT SELECT inmueble FROM recomendacion WHERE dia = %(a)s""", {"h": hoy, "a": ayer}).fetchall()]
+        salieron = conn.execute(
+            """SELECT r.inmueble AS id, r.total, r.tipo, i.url, coalesce(s.nombre, i.barrio_portal) AS barrio,
+                      CASE WHEN i.retirado IS NOT NULL THEN 'lo retiraron del portal'
+                           WHEN i.duplicado_de IS NOT NULL THEN 'era un duplicado'
+                           WHEN i.total > r.total THEN 'subió de precio'
+                           ELSE coalesce(i.comparacion->>'motivo', 'ya no le gana a tu apartamento') END AS motivo
+               FROM recomendacion r JOIN inmueble i ON i.id = r.inmueble LEFT JOIN sector s ON s.codigo = i.sector
+               WHERE r.dia = %(a)s AND r.inmueble NOT IN (SELECT inmueble FROM recomendacion WHERE dia = %(h)s)""",
+            {"h": hoy, "a": ayer}).fetchall()
+    return {"lista": lista, "serie": serie, "entraron": entraron, "salieron": salieron,
+            "dia": ult[0]["dia"] if ult else None, "tope_supera": tope_supera(priv),
+            "futuro_desde": str(((priv or {}).get("ingresos", {}).get("futuro") or {}).get("desde") or "")}

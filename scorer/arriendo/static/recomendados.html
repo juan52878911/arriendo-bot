@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recomendados</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#f7f6f2; --card:#fff; --text:#22211e; --muted:#6b6962; --line:#e3e1da; --accent:#0f6e56; --azul:#185fa5; --warn:#a3562d;
+          --si:#e1f2ea; --no:#f8e9e3; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1a; --card:#262624; --text:#ecebe6; --muted:#a3a19a; --line:#3a3936; --accent:#5dcaa5; --azul:#7fb2e5; --warn:#f0997b;
+          --si:#1f3a30; --no:#3d2a23; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:1200px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 4px; font-weight:600; } h2 { font-size:16px; margin:24px 0 8px; font-weight:600; }
+  .muted { color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
+  .cifras { display:flex; gap:10px; flex-wrap:wrap; margin:12px 0; }
+  .cifra { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 14px; min-width:150px; }
+  .cifra b { font-size:22px; display:block; }
+  #mapa { height:420px; border-radius:12px; border:1px solid var(--line); }
+  .tabla { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; }
+  tr.actual td { font-weight:600; background:var(--bg); }
+  tr.fila { cursor:pointer; } tr.fila:hover td { background:var(--bg); }
+  td.si { background:var(--si); } td.no { background:var(--no); }
+  .num { text-align:right; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .card.activo { outline:2px solid var(--accent); }
+  .card img { width:100%; height:160px; object-fit:cover; border-radius:8px; background:var(--line); }
+  .dims { font-size:13px; margin:6px 0; } .dims div { padding:1px 0; }
+  .ok { color:var(--accent); } .mal { color:var(--warn); }
+  .etq { display:inline-block; font-size:12px; padding:1px 8px; border-radius:99px; border:1px solid var(--line); }
+  .barras { display:flex; align-items:flex-end; gap:3px; height:90px; }
+  .barras div { flex:1; display:flex; flex-direction:column-reverse; min-width:6px; }
+  .barras span { display:block; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recomendados</h1>
+  <p class="muted"><a href="./">← mapa</a> · <a href="mercado">mercado y métricas</a> ·
+    Los inmuebles que le ganan a tu apartamento en lo que te importa, recalculados cada hora y guardados día a día.
+    <b>Recomendado</b>: le gana y tu parte cabe en tu presupuesto. <b>Le gana, pero se pasa</b>: mejor que donde vives, por encima de tu límite.</p>
+  <div class="cifras" id="cifras"></div>
+  <div id="mapa"></div>
+  <p class="muted"><span class="ok">●</span> recomendado · <span style="color:var(--azul)">●</span> le gana, pero se pasa de tu límite · ★ destino</p>
+
+  <h2>Comparativa con tu apartamento</h2>
+  <p class="muted">Verde: mejor que donde vives. Rojo: igual o peor. Haz clic en una fila para verla en el mapa.</p>
+  <div class="tabla"><table id="comparativa"></table></div>
+
+  <h2>Recomendados</h2>
+  <div class="grid" id="recomendados"></div>
+
+  <h2>Le ganan a tu apartamento, pero se pasan de tu límite</h2>
+  <p class="muted" id="nota-supera"></p>
+  <div class="grid" id="superan"></div>
+
+  <h2>Día a día</h2>
+  <div class="card" id="dias"></div>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const peso = n => n == null ? '?' : '$' + Math.round(n).toLocaleString('es-CO');
+const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const barrio = i => i.sector_nombre ?? i.barrio_portal ?? '';
+const NIVEL = { 'cómodo': 'cómodo', 'máximo': 'máximo', 'límite': 'límite', 'fuera de presupuesto': 'fuera' };
+
+// En una página larga, la rueda baja la página; el mapa solo hace zoom con ella después de un clic.
+const mapa = L.map('mapa', { scrollWheelZoom: false }).setView([4.66, -74.08], 12);
+mapa.on('click', () => mapa.scrollWheelZoom.enable());
+mapa.on('mouseout', () => mapa.scrollWheelZoom.disable());
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom: 19 }).addTo(mapa);
+L.marker([4.5981, -74.0760], { title: 'destino' }).addTo(mapa).bindTooltip('★ destino');
+fetch('api/capas/isocrona').then(r => r.json()).then(g => L.geoJSON(g,
+  { style: { color: '#185fa5', weight: 1.5, fillOpacity: 0.06, dashArray: '4 4' } }).addTo(mapa)).catch(() => {});
+const marcadores = {};
+
+// Columnas de la comparativa: dimensión de comparar.py, cómo se muestra y cómo se lee en tu apartamento.
+const COLS = [
+  ['seguridad', 'más tranquilo que', v => v == null ? '—' : v + ' %', a => a.tranquilo_pct],
+  ['peleas', 'riñas/km²', v => v ?? '—', a => a.rinas_km2],
+  ['robos', 'hurtos/km²', v => v ?? '—', a => a.hurto_km2],
+  ['ruido', 'ruido noche', v => v == null ? '—' : Math.round(v) + ' dB', a => a.ruido_noche_db],
+  ['aire', 'PM2.5', v => v == null ? '—' : Number(v).toFixed(1), a => a.pm25],
+  ['tiempo', 'al destino', v => v == null ? '—' : v + ' min', a => a.tiempo_min],
+  ['espacio', 'área', v => v == null ? '—' : Math.round(v) + ' m²', a => a.area_m2],
+  ['servicios', 'servicios', v => typeof v === 'number' ? Math.round(v * 100) + ' %' : esc(v ?? '—'), a => 'cortes frecuentes'],
+  ['parqueadero', 'parqueadero', v => v ? 'sí' : 'no', a => a.parqueadero],
+];
+
+function dimDe(i, nombre) { return (i.comparacion?.dimensiones || []).find(d => d.dimension === nombre); }
+
+function pintarComparativa(lista, actual) {
+  const cab = `<tr><th>inmueble</th><th class="num">total</th><th class="num">tu parte</th><th>nivel</th><th>le gana en</th>
+    ${COLS.map(c => `<th>${c[1]}</th>`).join('')}</tr>`;
+  const casa = actual ? `<tr class="actual"><td>Tu apartamento · ${esc(actual.sector_nombre ?? '')}</td>
+    <td class="num">${peso(actual.canon_total)}</td><td class="num">${peso(actual.canon_total)}</td><td>—</td><td>—</td>
+    ${COLS.map(c => `<td>${c[2](c[3](actual))}</td>`).join('')}</tr>` : '';
+  const filas = lista.map(i => {
+    const c = i.comparacion;
+    return `<tr class="fila" data-id="${esc(i.id)}"><td>${c.vale_la_pena ? '<span class="ok">●</span>' : '<span style="color:var(--azul)">●</span>'}
+      ${esc(barrio(i))} <span class="muted">${esc(i.portal)}</span></td>
+      <td class="num">${peso(i.total)}</td><td class="num">${peso(c.pago_tuyo)}</td><td>${esc(NIVEL[c.nivel] ?? c.nivel)}</td>
+      <td>${c.gana_en.length} de ${c.total_dimensiones}</td>
+      ${COLS.map(col => { const d = dimDe(i, col[0]);
+        return d ? `<td class="${d.mejora ? 'si' : 'no'}" title="${esc(d.texto)}">${col[2](d.nuevo)}</td>` : '<td>—</td>'; }).join('')}</tr>`;
+  }).join('');
+  const t = document.getElementById('comparativa');
+  t.innerHTML = cab + casa + filas;
+  t.querySelectorAll('tr.fila').forEach(f => f.addEventListener('click', () => enfocar(f.dataset.id)));
+}
+
+function tarjeta(i) {
+  const c = i.comparacion;
+  const dims = c.dimensiones.map(d => `<div class="${d.mejora ? 'ok' : 'mal'}">${d.mejora ? '✔' : '✘'} ${esc(d.dimension)}: ${esc(d.texto)}</div>`).join('');
+  const precios = (i.precios || []).filter((p, k, a) => k === 0 || p !== a[k - 1]);
+  const historia = precios.length > 1 ? `<div class="muted">Precio: ${precios.map(peso).join(' → ')}</div>` : '';
+  const alertas = (i.alertas || []).filter(a => !a.startsWith('Le gana a tu apartamento')).map(a => `<div class="mal" style="font-size:13px">⚠ ${esc(a)}</div>`).join('');
+  return `<div class="card" id="c-${esc(i.id)}">
+    <img loading="lazy" referrerpolicy="no-referrer" src="${esc(i.foto ?? '')}" alt="">
+    <div style="margin-top:6px"><b>${esc(barrio(i))}</b> <span class="muted">${esc(i.localidad ?? '')} · ${esc(i.portal)}</span></div>
+    <div>${peso(i.total)} total · <b>tu parte ${peso(c.pago_tuyo)}</b> <span class="etq">${esc(c.nivel)}</span>
+      <span class="muted">(${c.diferencia_mensual >= 0 ? '+' : ''}${peso(c.diferencia_mensual).replace('$-', '−$')} frente a hoy)</span></div>
+    <div class="muted">${i.area ?? '?'} m² · ${i.habitaciones ?? '?'} hab / ${i.banos ?? '?'} baños · estrato ${i.estrato ?? '?'} · puntaje ${i.puntaje ?? '—'}
+      · le gana en ${c.gana_en.length} de ${c.total_dimensiones}</div>
+    <div class="muted">Recomendado desde ${esc(i.desde ?? 'hoy')} · ${i.dias} día${i.dias == 1 ? '' : 's'} en la lista</div>
+    ${historia}
+    <details class="dims"><summary>comparativa con tu apartamento</summary>${dims}</details>
+    ${alertas}
+    <a href="${esc(i.url)}" target="_blank" rel="noopener">ver anuncio</a> · <a href="#" data-id="${esc(i.id)}" class="ver">ver en el mapa</a>
+  </div>`;
+}
+
+function pintarDias(d) {
+  const caja = document.getElementById('dias');
+  const max = Math.max(1, ...d.serie.map(s => s.recomendados + s.superan));
+  const barras = d.serie.map(s => `<div title="${esc(s.dia)}: ${s.recomendados} recomendados, ${s.superan} se pasan">
+      <span style="height:${90 * s.recomendados / max}px;background:var(--accent)"></span>
+      <span style="height:${90 * s.superan / max}px;background:var(--azul);opacity:.6"></span></div>`).join('');
+  const nombre = id => { const i = d.lista.find(x => x.id === id); return i ? `<a href="#" class="ver" data-id="${esc(id)}">${esc(barrio(i))} · ${peso(i.total)}</a>` : esc(id); };
+  caja.innerHTML = `${d.serie.length > 1 ? `<div class="barras">${barras}</div>
+      <div class="muted">${esc(d.serie[0].dia)} → ${esc(d.serie.at(-1).dia)} · verde: recomendados · azul: le ganan pero se pasan</div>`
+      : '<p class="muted">El registro diario empezó hoy; mañana ya se ve qué entra y qué sale.</p>'}
+    <h3 style="font-size:14px;margin:12px 0 4px">Entraron en el último día (${d.entraron.length})</h3>
+    ${d.entraron.length ? d.entraron.map(nombre).join('<br>') : '<span class="muted">Nada nuevo.</span>'}
+    <h3 style="font-size:14px;margin:12px 0 4px">Salieron (${d.salieron.length})</h3>
+    ${d.salieron.length ? d.salieron.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.barrio)}</a> · ${peso(s.total)} · <span class="muted">${esc(s.motivo)}</span>`).join('<br>') : '<span class="muted">Nada salió.</span>'}`;
+}
+
+function enfocar(id) {
+  document.querySelectorAll('.card.activo').forEach(x => x.classList.remove('activo'));
+  const card = document.getElementById('c-' + id); if (card) card.classList.add('activo');
+  const m = marcadores[id];
+  if (m) { mapa.setView(m.getLatLng(), 15); m.openTooltip(); document.getElementById('mapa').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+}
+
+async function cargar() {
+  const d = await (await fetch('api/recomendados')).json();
+  const rec = d.lista.filter(i => i.comparacion.vale_la_pena), sup = d.lista.filter(i => !i.comparacion.vale_la_pena);
+  const a = d.actual;
+  document.getElementById('cifras').innerHTML = `
+    <div class="cifra"><b class="ok">${rec.length}</b>recomendados</div>
+    <div class="cifra"><b style="color:var(--azul)">${sup.length}</b>le ganan, pero se pasan</div>
+    <div class="cifra"><b>${d.entraron.length} / ${d.salieron.length}</b>entraron / salieron en el último día</div>
+    ${a ? `<div class="cifra"><b>${peso(a.canon_total)}</b>pagas hoy · ${a.area_m2} m² · ${a.tiempo_min} min al destino</div>` : ''}`;
+  for (const i of d.lista) {
+    if (!i.lat) continue;
+    const c = i.comparacion;
+    marcadores[i.id] = L.circleMarker([i.lat, i.lon], { radius: c.vale_la_pena ? 10 : 7, weight: 2, color: '#fff',
+        fillColor: c.vale_la_pena ? '#0f6e56' : '#185fa5', fillOpacity: 0.9 })
+      .addTo(mapa).bindTooltip(`${esc(barrio(i))} · ${peso(i.total)} · tu parte ${peso(c.pago_tuyo)} (${esc(c.nivel)}) · gana en ${c.gana_en.length}/${c.total_dimensiones}`)
+      .on('click', () => { enfocar(i.id); document.getElementById('c-' + i.id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+  }
+  const puntos = Object.values(marcadores).map(m => m.getLatLng());
+  if (puntos.length) mapa.fitBounds(L.latLngBounds(puntos).pad(0.2), { maxZoom: 14 });
+  document.getElementById('nota-supera').textContent = `Solo hasta ${peso(d.tope_supera)} en total: lo que alcanzarías${d.futuro_desde ? ' desde ' + d.futuro_desde : ''} con tu máximo futuro y el aporte actual del roomie.`;
+  pintarComparativa(d.lista, a);
+  document.getElementById('recomendados').innerHTML = rec.length ? rec.map(tarjeta).join('')
+    : '<p class="muted">Hoy nada le gana a tu apartamento dentro de tu presupuesto.</p>';
+  document.getElementById('superan').innerHTML = sup.length ? sup.map(tarjeta).join('') : '<p class="muted">Ninguno.</p>';
+  pintarDias(d);
+  document.querySelectorAll('a.ver').forEach(x => x.addEventListener('click', ev => { ev.preventDefault(); enfocar(x.dataset.id); }));
+}
+cargar();
+</script>
+</body>
+</html>

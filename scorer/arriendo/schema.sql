@@ -238,3 +238,17 @@ CREATE TABLE IF NOT EXISTS venta (
   geom         geometry(Point, 4326),
   visto        timestamptz NOT NULL DEFAULT now()
 );
+
+-- Foto diaria de lo que le gana a tu apartamento: «recomendado» si además cabe en tu presupuesto
+-- (vale_la_pena), «supera» si le gana pero se pasa de tu límite. Se rehace cada hora para el día en curso.
+CREATE TABLE IF NOT EXISTS recomendacion (
+  dia       date NOT NULL,
+  inmueble  text NOT NULL REFERENCES inmueble (id) ON DELETE CASCADE,
+  tipo      text NOT NULL,
+  puntaje   real,
+  total     bigint,
+  pago      bigint,
+  nivel     text,
+  gana_en   text[],
+  PRIMARY KEY (dia, inmueble)
+);
