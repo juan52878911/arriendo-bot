@@ -288,3 +288,32 @@ def comparacion_personal(conn, priv: dict | None, ref: dict | None) -> dict | No
                  cuota_inicial=round(precio * priv["compra"]["pct_cuota_inicial"] / 100))
     return {"actual": ref, "resumen": resumen, "motivos": motivos, "vale_la_pena": vale,
             "compra": {"capacidad": {k: v for k, v in cap.items() if k != "factor"}, "area_objetivo": area, "por_localidad": venta}}
+
+
+def por_pago(conn, priv: dict | None) -> dict | None:
+    """Para cada nivel de lo que pagas tú: cuántos apartamentos le ganan al tuyo, el mejor de ellos y
+    lo que te cuesta frente a hoy (al mes, al año y en meses de ahorro para una cuota inicial)."""
+    if not priv:
+        return None
+    ing, actual = priv["ingresos"], priv["vivienda_actual"]
+    aporte, salario, hoy = ing.get("aporte_companero", 0), ing["salario_mensual"], ing.get("pago_ideal", actual["canon_total"])
+    niveles = sorted({hoy - 200000, hoy, hoy + 100000, hoy + 200000, hoy + 300000, ing.get("pago_max", hoy), hoy + 400000, hoy + 600000})
+    filas = conn.execute("""
+        SELECT i.id, i.total, i.area, round(i.puntaje) AS puntaje, coalesce(s.nombre, i.barrio_portal) AS barrio, i.url,
+               jsonb_array_length(i.comparacion->'gana_en') AS gana
+        FROM inmueble i LEFT JOIN sector s ON s.codigo = i.sector
+        WHERE i.duplicado_de IS NULL AND i.retirado IS NULL AND (i.comparacion->>'mejor_que_actual')::boolean""").fetchall()
+    cap = capacidad_compra(priv)
+    salida = []
+    for n in niveles:
+        aqui = [f for f in filas if f["total"] - aporte <= n]
+        mejor = max(aqui, key=lambda f: (f["puntaje"] or 0), default=None)
+        extra = n - hoy
+        salida.append({
+            "pago": n, "total_arriendo": n + aporte, "pct_salario": round(100 * n / salario, 1),
+            "extra_mes": extra, "extra_anio": extra * 12,
+            "pct_cuota_inicial_anio": round(100 * extra * 12 / cap["cuota_inicial"], 1) if extra > 0 else 0,
+            "opciones": len(aqui), "area_mediana": sorted(f["area"] for f in aqui)[len(aqui) // 2] if aqui else None,
+            "mejor": mejor})
+    return {"hoy": hoy, "aporte": aporte, "salario": salario, "niveles": salida,
+            "regla": "hasta 30 % del salario en vivienda deja margen para ahorrar; por encima de 35 % se aprieta"}

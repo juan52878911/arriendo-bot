@@ -165,3 +165,12 @@ def test_veredicto_no_si_no_mejora_seguridad_o_no_alcanza():
     assert not inseguro["vale_la_pena"] and "seguridad" in inseguro["motivo"]
     caro = comparar(base(total=2900000, area=72, tiempo_min=32), {"seguridad_pct": 0.3}, r, REF, PRIV)
     assert not caro["asequible"]
+
+
+def test_mejor_que_actual_no_depende_del_precio():
+    from arriendo.comparar import comparar
+    priv = {"ingresos": {"salario_mensual": 4000000, "aporte_companero": 800000, "pago_ideal": 1000000, "pago_max": 1500000},
+            "veredicto": {"mejora_seguridad_min": 20, "area_min_pct": 80, "dimensiones_min": 4}}
+    i = base(total=2500000, area=72, tiempo_min=32)
+    c = comparar(i, {"seguridad_pct": 0.3, "ruido_noche_db": 57.5, "pm25": 11}, evaluar(i, {}, CFG), REF, priv)
+    assert c["mejor_que_actual"] and not c["asequible"] and not c["vale_la_pena"]   # paga 1,7 M > 1,5 M

@@ -12,7 +12,8 @@ vivienda_actual:
 ingresos:
   salario_mensual: 4000000
   aporte_companero: 0             # lo que pone quien comparte contigo
-  pct_max_vivienda: 35              # parte del salario que estás dispuesto a pagar en vivienda
+  pago_ideal: 800000                # lo que pagas hoy y puedes pagar sin pensarlo
+  pago_max: 1000000                 # tope de tu parte del arriendo
 
 compra:                             # supuestos para estimar si podrías comprar; verifica la tasa con tu banco
   tasa_efectiva_anual: 12.5

@@ -62,6 +62,14 @@ async function cargar() {
   html.push(tarjeta('Oferta nueva que cumple todo', tabla(t.oferta_diaria, [['día', f => f.dia], ['nuevas', f => f.n, 'num']]),
     'El primer día incluye lo que ya estaba publicado al arrancar.'));
   html.push('</div>');
+  const pp = t.por_pago;
+  if (pp) {
+    html.push(`<h2>¿Cuánto pagar?</h2><p class="muted">Tu parte del arriendo (tu amigo pone ${peso(pp.aporte)}). Hoy pagas ${peso(pp.hoy)}, el ${(100 * pp.hoy / pp.salario).toFixed(0)} % de tu salario. Regla: ${pp.regla}. Solo cuentan apartamentos que le ganan al tuyo en seguridad y en lo demás.</p>`);
+    html.push(tabla(pp.niveles, [['tu pago', f => peso(f.pago)], ['% salario', f => f.pct_salario + ' %', 'num'],
+      ['vs hoy al mes', f => (f.extra_mes > 0 ? '+' : '') + peso(f.extra_mes), 'num'], ['al año', f => (f.extra_anio > 0 ? '+' : '') + peso(f.extra_anio), 'num'],
+      ['opciones mejores', f => f.opciones, 'num'], ['m² típico', f => f.area_mediana ? Math.round(f.area_mediana) : '—', 'num'],
+      ['la mejor', f => f.mejor ? `${f.mejor.puntaje} · ${f.mejor.barrio} · ${peso(f.mejor.total)}` : '—']]));
+  }
   const pe = t.personal;
   if (pe) {
     const r = pe.actual, cap = pe.compra.capacidad;

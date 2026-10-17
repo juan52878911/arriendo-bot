@@ -108,13 +108,18 @@ def comparar(i: dict, ctx: dict, r: dict, ref: dict | None, priv: dict | None) -
     ing = priv.get("ingresos", {})
     pago = max(0, (i.get("total") or 0) - ing.get("aporte_companero", 0))
     pct = 100 * pago / ing["salario_mensual"] if ing.get("salario_mensual") else None
-    asequible = pct is not None and pct <= ing.get("pct_max_vivienda", 35)
+    tope = ing.get("pago_max") or (ing["salario_mensual"] * ing.get("pct_max_vivienda", 35) / 100 if ing.get("salario_mensual") else None)
+    asequible = tope is not None and pago <= tope
+    ideal = pago <= ing.get("pago_ideal", tope or 0)
     gana = [d["dimension"] for d in dims if d["mejora"]]
     mejora = {d["dimension"]: d["mejora"] for d in dims}
     # Más seguro si el sector es claramente más tranquilo en conjunto, o si hay muchas menos peleas sin más robos.
     seguridad_ok = mejora.get("seguridad", False) or (mejora.get("peleas", False) and mejora.get("robos", False))
     espacio_ok = not i.get("area") or i["area"] >= ref["area_m2"] * v.get("area_min_pct", 80) / 100
-    vale = seguridad_ok and espacio_ok and asequible and len(gana) >= v.get("dimensiones_min", 4) and not r["descartes"]
+    # «Mejor que tu casa» sin mirar el precio; luego, si además lo puedes pagar con tranquilidad.
+    mejor = (seguridad_ok and espacio_ok and len(gana) >= v.get("dimensiones_min", 4)
+             and not [d for d in r["descartes"] if not d.startswith("canon total")])
+    vale = mejor and asequible and not r["descartes"]
     motivo = ("le gana en lo que te importa" if vale else
               ("menos peleas que hoy, pero más robos" if mejora.get("peleas") and not mejora.get("robos") else
                "no mejora lo suficiente la seguridad") if not seguridad_ok else
@@ -125,4 +130,4 @@ def comparar(i: dict, ctx: dict, r: dict, ref: dict | None, priv: dict | None) -
     return {"dimensiones": dims, "gana_en": gana, "total_dimensiones": len(dims),
             "pago_tuyo": pago, "pct_salario": round(pct, 1) if pct is not None else None,
             "pago_hoy": ref["canon_total"], "diferencia_mensual": pago - ref["canon_total"],
-            "asequible": asequible, "vale_la_pena": vale, "motivo": motivo}
+            "asequible": asequible, "ideal": ideal, "mejor_que_actual": bool(mejor), "vale_la_pena": vale, "motivo": motivo}

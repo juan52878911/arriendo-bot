@@ -895,6 +895,7 @@ def para_ti() -> dict:
     with db.connect() as conn:
         datos = mercado.para_ti(conn, db.config())
         datos["personal"] = mercado.comparacion_personal(conn, comparar.privado(), comparar.referencia(conn))
+        datos["por_pago"] = mercado.por_pago(conn, comparar.privado())
         return datos
 
 
