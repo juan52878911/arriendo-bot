@@ -62,6 +62,25 @@ async function cargar() {
   html.push(tarjeta('Oferta nueva que cumple todo', tabla(t.oferta_diaria, [['día', f => f.dia], ['nuevas', f => f.n, 'num']]),
     'El primer día incluye lo que ya estaba publicado al arrancar.'));
   html.push('</div>');
+  const pe = t.personal;
+  if (pe) {
+    const r = pe.actual, cap = pe.compra.capacidad;
+    html.push(`<h2>Tu apartamento contra lo que hay</h2><p class="muted">Hoy: ${esc(r.nombre)} · ${r.area_m2} m² · ${peso(r.canon_total)} · más tranquilo que el ${r.tranquilo_pct} % de los sectores · ruido nocturno ~${r.ruido_noche_db ?? '?'} dB · PM2.5 ${r.pm25?.toFixed?.(0) ?? '?'} · ${r.tiempo_min ?? '?'} min al destino · ${esc(r.servicios)}.</p>
+      <p><b>${pe.resumen.valen}</b> de ${pe.resumen.candidatos} candidatos le ganan a tu apartamento en lo que te importa y caben en tu bolsillo.</p><div class="grid">`);
+    html.push(tarjeta('Vale la pena verlos', pe.vale_la_pena.length ? pe.vale_la_pena.map(v => {
+      const c = v.comparacion;
+      return `<div style="margin-bottom:10px"><b>${v.puntaje}</b> · <a href="${esc(v.url)}" target="_blank" rel="noopener">${esc(v.barrio)}</a> · ${peso(v.total)} · ${v.area} m²<br>
+        <span class="muted">Pagarías ${peso(c.pago_tuyo)} (${c.pct_salario} % de tu salario, ${c.diferencia_mensual >= 0 ? '+' : ''}${peso(c.diferencia_mensual)} frente a hoy). Gana en: ${c.gana_en.join(', ')}.</span><br>
+        ${c.dimensiones.map(d => `<span class="muted">${d.mejora ? '✔' : '·'} ${esc(d.texto)}</span>`).join('<br>')}</div>`;
+    }).join('') : '<p class="muted">Ninguno todavía.</p>'));
+    html.push(tarjeta('Por qué los demás candidatos no', tabla(pe.motivos, [['motivo', f => f.motivo], ['n', f => f.n, 'num']])));
+    html.push(tarjeta(`¿Podrías comprar? (${pe.compra.area_objetivo} m², 3+ hab)`,
+      `<p>Con tu salario podrías pagar una cuota de ${peso(cap.cuota_max)} → préstamo de ~${peso(cap.prestamo_max)} → vivienda de hasta <b>${peso(cap.precio_max)}</b> con una cuota inicial de ${peso(cap.cuota_inicial)}.</p>` +
+      tabla(pe.compra.por_localidad, [['localidad', f => f.localidad], ['n', f => f.n, 'num'], ['$/m²', f => peso(f.m2), 'num'],
+        ['70 m² típico', f => peso(f.precio_objetivo), 'num'], ['salario necesario', f => peso(f.salario_necesario), 'num'], ['alcanza', f => f.alcanza ? 'el 25 % más barato' : 'no', 'num']]),
+      `Supuestos: tasa ${cap.supuestos.tasa_efectiva_anual} % E.A., ${cap.supuestos.plazo_anios} años, cuota ≤ ${cap.supuestos.pct_cuota_max_ingreso} % del ingreso, cuota inicial ${cap.supuestos.pct_cuota_inicial} %. Verifica la tasa con tu banco.`));
+    html.push('</div>');
+  }
   html.push('<h2>Lo que dice chrono</h2><div class="grid">');
   html.push(tarjeta('Horas de más publicaciones', a.horas_pico && a.horas_pico.length
     ? `<p><b>${a.horas_pico.map(h => h + ':00').join(', ')}</b></p>` : '<p class="muted">Todavía sin datos suficientes.</p>',

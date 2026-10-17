@@ -66,3 +66,12 @@
 
 # Consulta por inmueble: ruido nocturno, Mapa Estratégico de Ruido 2018-2021 (SDA):
 #   https://mapas.ambientebogota.gov.co/server/rest/services/Calidad_auditiva/MER_Nocturno_Jornada_Ordinario_dB_Bogota_DC__2018_2021/FeatureServer/0
+
+- id: venta_fincaraiz
+  descripcion: Apartamentos en venta de 3+ habitaciones en los barrios vigilados (una página por barrio), para estimar si podrías comprar
+  entidad: Fincaraíz
+  tipo: portal
+  url: https://www.fincaraiz.com.co/venta/apartamentos/
+  tabla: venta
+  frecuencia_dias: 30
+  barrios: []

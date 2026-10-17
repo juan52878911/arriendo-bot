@@ -216,3 +216,25 @@ CREATE TABLE IF NOT EXISTS sospecha (
   creada     timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (inmueble, parecido)
 );
+
+-- Vivienda actual (de config/privado.yaml) medida con las mismas capas, y la comparación de cada candidato.
+CREATE TABLE IF NOT EXISTS referencia (
+  id        text PRIMARY KEY,
+  datos     jsonb NOT NULL,
+  calculada timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE inmueble ADD COLUMN IF NOT EXISTS comparacion jsonb;
+
+-- Anuncios de venta (Fincaraíz) en los mismos barrios, para estimar si podrías comprar.
+CREATE TABLE IF NOT EXISTS venta (
+  id           text PRIMARY KEY,
+  barrio       text,
+  sector       text,
+  localidad    text,
+  precio       bigint,
+  area         real,
+  habitaciones int,
+  estrato      int,
+  geom         geometry(Point, 4326),
+  visto        timestamptz NOT NULL DEFAULT now()
+);

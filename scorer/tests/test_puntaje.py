@@ -133,6 +133,35 @@ def test_sospecha_de_texto_copiado_alerta_y_republicacion_explica():
 
 
 def test_descarta_oficinas_que_vienen_en_busquedas_de_apartamentos():
-    r = evaluar(base(titulo="Oficina en arriendo en Ortezal", descripcion=""), {}, CFG)
+    r = evaluar(base(titulo="Oficina en arriendo en Ortezal", descripcion="",
+                     url="https://www.ciencuadras.com/inmueble/oficina-en-arriendo-en-ortezal-bogota-1"), {}, CFG)
     assert any("no es vivienda" in d for d in r["descartes"])
+    # Aunque el título diga apartamento (Ciencuadras), manda la URL o el tipo del portal.
+    r2 = evaluar(base(titulo="Apartamento en arriendo en Alcázares", crudo={"realEstateType": "Consultorio"}), {}, CFG)
+    assert any("no es vivienda" in d for d in r2["descartes"])
     assert not evaluar(base(titulo="Apartamento en arriendo en Ortezal"), {}, CFG)["descartes"]
+
+
+REF = {"tranquilo_pct": 8, "ruido_noche_db": 67.5, "pm25": 15, "tiempo_min": 70, "area_m2": 60,
+       "canon_total": 1000000, "parqueadero": False}
+PRIV = {"ingresos": {"salario_mensual": 4000000, "aporte_companero": 800000, "pct_max_vivienda": 35},
+        "veredicto": {"mejora_seguridad_min": 20, "area_min_pct": 80, "dimensiones_min": 4}}
+
+
+def test_veredicto_vale_la_pena_cuando_gana_en_lo_importante():
+    from arriendo.comparar import comparar
+    i = base(total=2400000, area=72, tiempo_min=32, parqueaderos=1)
+    r = evaluar(i, {}, CFG)
+    c = comparar(i, {"seguridad_pct": 0.3, "ruido_noche_db": 57.5, "pm25": 11}, r, REF, PRIV)
+    assert c["vale_la_pena"] and c["pago_tuyo"] == 1600000 and c["pct_salario"] == 32.0
+    assert {"seguridad", "ruido", "aire", "tiempo", "espacio"} <= set(c["gana_en"])
+
+
+def test_veredicto_no_si_no_mejora_seguridad_o_no_alcanza():
+    from arriendo.comparar import comparar
+    i = base(total=2400000, area=72, tiempo_min=32)
+    r = evaluar(i, {}, CFG)
+    inseguro = comparar(i, {"seguridad_pct": 0.85, "ruido_noche_db": 57.5, "pm25": 11}, r, REF, PRIV)
+    assert not inseguro["vale_la_pena"] and "seguridad" in inseguro["motivo"]
+    caro = comparar(base(total=2900000, area=72, tiempo_min=32), {"seguridad_pct": 0.3}, r, REF, PRIV)
+    assert not caro["asequible"]

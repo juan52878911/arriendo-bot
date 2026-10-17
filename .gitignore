@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 chrono/historial.jsonl
 chrono/.chrono/
+config/privado.yaml

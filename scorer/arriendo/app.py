@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import yaml
 
-from . import db, externos, ingesta, mercado
+from . import comparar, db, externos, ingesta, mercado
 from .externos import e
 from .puntaje import evaluar
 
@@ -141,7 +141,7 @@ def desde_ciencuadras(rec: dict) -> dict:
     return {
         "id": f"ciencuadras:{rec['id']}", "portal": "ciencuadras",
         "url": BASE_CIENCUADRAS + rec.get("url", ""),
-        "titulo": f"Apartamento en arriendo en {rec.get('neighborhood') or rec.get('locality') or 'Bogotá'}",
+        "titulo": f"{rec.get('realEstateType') or 'Inmueble'} en arriendo en {rec.get('neighborhood') or rec.get('locality') or 'Bogotá'}",
         "descripcion": None, "canon": canon, "total": canon + (admin or 0) if canon else None,
         "administracion": admin, "area": _num(rec.get("privateArea")) or _num(rec.get("area")),
         "habitaciones": int(_num(rec.get("rooms")) or 0) or None,
@@ -225,11 +225,12 @@ def contexto(conn, i: dict, cfg: dict) -> dict:
     ctx: dict = {}
     if i["geom"] is None:
         return ctx
-    s = conn.execute("""SELECT codigo, nombre, localidad, seguridad_pct, periodo, estrato_moda FROM sector
+    s = conn.execute("""SELECT codigo, nombre, localidad, seguridad_pct, periodo, estrato_moda, incidentes, area_km2 FROM sector
                         WHERE ST_Contains(geom, %s::geometry) LIMIT 1""", (i["geom"],)).fetchone()
     if s:
         ctx.update(sector=s["codigo"], sector_nombre=s["nombre"], localidad=s["localidad"],
-                   seguridad_pct=s["seguridad_pct"], periodo=s["periodo"], estrato_moda=s["estrato_moda"])
+                   seguridad_pct=s["seguridad_pct"], periodo=s["periodo"], estrato_moda=s["estrato_moda"],
+                   **comparar.por_km2(s["incidentes"], s["area_km2"]))
     else:
         l = conn.execute("SELECT nombre FROM localidad WHERE ST_Contains(geom, %s::geometry) LIMIT 1",
                          (i["geom"],)).fetchone()
@@ -416,6 +417,13 @@ def puntuar(id_: str) -> None:
                                            FROM sospecha s JOIN inmueble i ON i.id = s.parecido
                                            WHERE s.inmueble = %s""", (id_,)).fetchall()
         r = evaluar(i, ctx, cfg)
+        comp = comparar.comparar(i, ctx, r, comparar.referencia(conn), comparar.privado())
+        if comp:
+            conn.execute("UPDATE inmueble SET comparacion = %s WHERE id = %s", (json.dumps(comp), id_))
+            if comp["vale_la_pena"]:
+                r["alertas"].insert(0, f"Le gana a tu apartamento actual en {len(comp['gana_en'])} de "
+                                       f"{comp['total_dimensiones']}: {', '.join(comp['gana_en'])}. Pagarías "
+                                       f"${comp['pago_tuyo']:,.0f} ({comp['pct_salario']} % de tu salario).".replace(",", "."))
         conn.execute("""UPDATE inmueble SET sector = %s, localidad = %s, tm_m = %s, tiempo_min = %s,
                           tiempo_fuente = %s, puntaje = %s, detalle = %s, descartes = %s, alertas = %s,
                           duplicado_de = %s
@@ -625,7 +633,7 @@ def inmuebles(todos: bool = False, limite: int = 300) -> list[dict]:
                                " AND duplicado_de IS NULL AND retirado IS NULL")
     with db.connect() as conn:
         return conn.execute(f"""
-            SELECT id, portal, duplicado_de, retirado, url, fredy_url, titulo, total, area, habitaciones, banos, estrato, puntaje, detalle,
+            SELECT id, portal, duplicado_de, retirado, comparacion, url, fredy_url, titulo, total, area, habitaciones, banos, estrato, puntaje, detalle,
                    descartes, alertas, tiempo_min, tiempo_fuente, barrio_portal, localidad,
                    (SELECT nombre FROM sector s WHERE s.codigo = i.sector) AS sector_nombre,
                    imagenes[1] AS foto, publicado, visto_primero, ST_Y(geom) AS lat, ST_X(geom) AS lon
@@ -885,7 +893,15 @@ def leer_analisis() -> dict | None:
 @app.get("/api/para-ti")
 def para_ti() -> dict:
     with db.connect() as conn:
-        return mercado.para_ti(conn, db.config())
+        datos = mercado.para_ti(conn, db.config())
+        datos["personal"] = mercado.comparacion_personal(conn, comparar.privado(), comparar.referencia(conn))
+        return datos
+
+
+@app.get("/api/referencia")
+def ver_referencia(forzar: bool = False) -> dict:
+    with db.connect() as conn:
+        return {"actual": comparar.referencia(conn, forzar)}
 
 
 @app.get("/api/resumen")

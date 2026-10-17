@@ -197,8 +197,8 @@ def para_ti(conn, cfg: dict) -> dict:
               WHERE i.duplicado_de IS NULL AND i.retirado IS NULL AND i.geom IS NOT NULL
                 AND upper(unaccent(coalesce(i.localidad, ''))) <> ALL(%(excl)s)
                 AND i.total BETWEEN 500000 AND 30000000
-                AND NOT (lower(i.url || ' ' || coalesce(i.titulo, '')) ~ '(oficina|local|bodega|consultorio)'
-                         AND lower(i.url || ' ' || coalesce(i.titulo, '')) !~ 'apartamento')"""
+                AND lower(i.url) !~ '(oficina|local|bodega|consultorio)-en-'
+                AND coalesce(i.crudo->>'realEstateType', 'Apartamento') !~* '(oficina|local|bodega|consultorio)'"""
     p = {"excl": excluidas or [""], "tope": tope, "hab": hab, "banos": banos}
     q = lambda sql: conn.execute(sql, p).fetchall()
     return {
@@ -237,3 +237,54 @@ def para_ti(conn, cfg: dict) -> dict:
                         FROM (SELECT total, lag(total) OVER (PARTITION BY inmueble ORDER BY visto) AS antes FROM precio) p
                         WHERE antes IS NOT NULL AND total < antes""")[0],
     }
+
+
+def capacidad_compra(priv: dict) -> dict:
+    """Préstamo y precio máximos con el salario y los supuestos de privado.yaml (cuota fija mensual)."""
+    c, ing = priv["compra"], priv["ingresos"]
+    r = (1 + c["tasa_efectiva_anual"] / 100) ** (1 / 12) - 1
+    n = c["plazo_anios"] * 12
+    factor = (1 - (1 + r) ** -n) / r
+    cuota = ing["salario_mensual"] * c["pct_cuota_max_ingreso"] / 100
+    prestamo = cuota * factor
+    precio = prestamo / (1 - c["pct_cuota_inicial"] / 100)
+    return {"cuota_max": round(cuota), "prestamo_max": round(prestamo), "precio_max": round(precio),
+            "cuota_inicial": round(precio * c["pct_cuota_inicial"] / 100), "factor": factor, "supuestos": c}
+
+
+def comparacion_personal(conn, priv: dict | None, ref: dict | None) -> dict | None:
+    """Tu apartamento contra lo que hay; y si comprar es viable y en cuánto tiempo."""
+    if not priv or not ref:
+        return None
+    vale = conn.execute("""SELECT round(puntaje) AS puntaje, coalesce(s.nombre, i.barrio_portal) AS barrio, i.total, i.area,
+                                  i.url, i.comparacion
+                           FROM inmueble i LEFT JOIN sector s ON s.codigo = i.sector
+                           WHERE i.duplicado_de IS NULL AND i.retirado IS NULL AND i.comparacion IS NOT NULL
+                             AND (i.comparacion->>'vale_la_pena')::boolean
+                           ORDER BY i.puntaje DESC LIMIT 10""").fetchall()
+    resumen = conn.execute("""SELECT count(*) FILTER (WHERE (comparacion->>'vale_la_pena')::boolean) AS valen,
+                                     count(*) FILTER (WHERE coalesce(cardinality(descartes), 0) = 0) AS candidatos,
+                                     count(*) AS comparados
+                              FROM inmueble WHERE comparacion IS NOT NULL AND duplicado_de IS NULL AND retirado IS NULL""").fetchone()
+    motivos = conn.execute("""SELECT comparacion->>'motivo' AS motivo, count(*) AS n FROM inmueble
+                              WHERE comparacion IS NOT NULL AND duplicado_de IS NULL AND retirado IS NULL
+                                AND coalesce(cardinality(descartes), 0) = 0
+                              GROUP BY 1 ORDER BY 2 DESC""").fetchall()
+    cap = capacidad_compra(priv)
+    area = priv["compra"]["area_objetivo_m2"]
+    venta = conn.execute("""SELECT coalesce(localidad, '?') AS localidad, count(*) AS n,
+                                   percentile_cont(0.5) WITHIN GROUP (ORDER BY precio / nullif(area, 0))::bigint AS m2,
+                                   percentile_cont(0.25) WITHIN GROUP (ORDER BY precio / nullif(area, 0))::bigint AS m2_p25
+                            FROM venta WHERE area > 30 AND precio BETWEEN 80000000 AND 3000000000
+                              AND visto >= now() - interval '60 days'
+                            GROUP BY 1 HAVING count(*) >= 3 ORDER BY 3""").fetchall()
+    for v in venta:
+        precio = v["m2"] * area
+        precio_barato = v["m2_p25"] * area
+        cuota_necesaria = precio * (1 - priv["compra"]["pct_cuota_inicial"] / 100) / cap["factor"]
+        v.update(precio_objetivo=round(precio), precio_barato=round(precio_barato),
+                 alcanza=precio_barato <= cap["precio_max"],
+                 salario_necesario=round(cuota_necesaria / (priv["compra"]["pct_cuota_max_ingreso"] / 100)),
+                 cuota_inicial=round(precio * priv["compra"]["pct_cuota_inicial"] / 100))
+    return {"actual": ref, "resumen": resumen, "motivos": motivos, "vale_la_pena": vale,
+            "compra": {"capacidad": {k: v for k, v in cap.items() if k != "factor"}, "area_objetivo": area, "por_localidad": venta}}

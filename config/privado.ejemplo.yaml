@@ -1,0 +1,28 @@
+# Plantilla de config/privado.yaml (ese archivo no va al repositorio). Copia y ajusta.
+
+
+vivienda_actual:
+  nombre: Tu conjunto actual
+  sector_catastral: "000000"       # código del sector catastral donde vives (tabla sector)
+  area_m2: 60
+  canon_total: 1000000
+  parqueadero: false
+  problemas: [inseguridad, ruido de vecinos, peleas, cortes de agua, cortes de luz, cortes de internet]
+
+ingresos:
+  salario_mensual: 4000000
+  aporte_companero: 0             # lo que pone quien comparte contigo
+  pct_max_vivienda: 35              # parte del salario que estás dispuesto a pagar en vivienda
+
+compra:                             # supuestos para estimar si podrías comprar; verifica la tasa con tu banco
+  tasa_efectiva_anual: 12.5
+  plazo_anios: 20
+  pct_cuota_max_ingreso: 30         # tope habitual de los bancos para la cuota frente al ingreso
+  pct_cuota_inicial: 30             # vivienda no VIS
+  area_objetivo_m2: 70
+
+# Cuándo vale la pena ir a ver un inmueble frente a donde vives:
+veredicto:
+  mejora_seguridad_min: 20          # puntos de percentil (más tranquilo que el X % de los sectores)
+  area_min_pct: 80                  # al menos el 80 % del área actual
+  dimensiones_min: 4                # gana en al menos 4 de las dimensiones comparadas

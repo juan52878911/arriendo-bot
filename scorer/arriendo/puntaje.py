@@ -23,6 +23,29 @@ def _palabras(texto: str, lista: list[str]) -> list[str]:
     return sorted(p for p in halladas if not any(p != q and p in q for q in halladas))
 
 
+_RANGOS = [(r"menos de 1", 0.5), (r"1 a 8", 4.5), (r"9 a 15", 12), (r"16 a 30", 23), (r"mas de 30", 40),
+           (r"entre 0 y 5", 2.5), (r"entre 5 y 10", 7.5), (r"entre 10 y 20", 15), (r"mas de 20", 30)]
+
+
+def antiguedad_anios(i: dict) -> float | None:
+    """Edad aproximada del edificio según lo que publica cada portal."""
+    crudo = i.get("crudo") or {}
+    if isinstance(crudo, str):
+        return None
+    if i.get("portal") == "ciencuadras":
+        try:
+            return float(crudo.get("antiquity"))
+        except (TypeError, ValueError):
+            return None
+    texto = ""
+    if i.get("portal") == "fincaraiz":
+        texto = next((str(t.get("value")) for t in crudo.get("technicalSheet") or [] if t.get("field") == "constructionYear"), "")
+    elif i.get("portal") == "metrocuadrado":
+        texto = next((str(f) for f in crudo.get("featured") or [] if "tiempoConstruido" in str(f)), "")
+    texto = sin_tildes(texto)
+    return next((v for patron, v in _RANGOS if re.search(patron, texto)), None)
+
+
 def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
     """`i` es la fila de inmueble; `contexto` trae lo que sale de las capas (sector, mediana...).
 
@@ -36,8 +59,12 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
 
     # Filtros duros ------------------------------------------------------------------------
     # Las búsquedas de "apartamento" de algunos portales (Ciencuadras) también devuelven oficinas y locales.
-    tipo = sin_tildes(f"{i.get('url') or ''} {i.get('titulo') or ''}")
-    if re.search(r"\b(oficina|local|bodega|consultorio|lote|parqueadero)\b", tipo) and "apartamento" not in tipo:
+    # Manda el tipo que publica el portal o la URL; el título no, porque para Ciencuadras lo armamos nosotros.
+    crudo = i.get("crudo") if isinstance(i.get("crudo"), dict) else {}
+    tipo_portal = sin_tildes(str(crudo.get("realEstateType") or (crudo.get("mtipoinmueble") or {}).get("nombre")
+                                 or (crudo.get("property_type") or {}).get("name") or ""))
+    no_vivienda = r"\b(oficina|local|bodega|consultorio|lote|parqueadero)\b"
+    if re.search(no_vivienda, tipo_portal) or re.search(no_vivienda, sin_tildes(i.get("url") or "")):
         descartes.append("no es vivienda (oficina, local o similar)")
     habitaciones = i.get("habitaciones")
     falsas = _palabras(texto, b.get("habitacion_falsa", []))
@@ -153,6 +180,20 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
         alertas.append(f"{contexto['siniestros_150m']} siniestros viales a menos de 150 m (2015-2021)")
     if contexto.get("suelo_m2") and detalle.get("precio_m2"):
         detalle["precio_m2"]["nota"] += f"; suelo de la manzana ${contexto['suelo_m2']:,.0f}/m² (Catastro)".replace(",", ".")
+
+    # Servicios estables: lo que protege de cortes de agua, luz e internet, y un edificio no tan viejo.
+    respaldo = _palabras(texto, cfg["palabras"].get("servicios", []))
+    edad = antiguedad_anios(i)
+    partes = [min(1.0, len(respaldo) / 2)]
+    notas = [", ".join(respaldo) if respaldo else "el anuncio no menciona planta, tanque ni fibra"]
+    if edad is not None:
+        partes.append(_lineal(edad, 40, 10))
+        notas.append(f"edificio de ~{edad:.0f} años")
+    poner("servicios", sum(partes) / len(partes), "; ".join(notas))
+    tranquilidad = _palabras(texto, cfg["palabras"].get("tranquilidad", []))
+    if tranquilidad and "aire_ruido" in detalle:
+        detalle["aire_ruido"]["valor"] = round(min(1.0, detalle["aire_ruido"]["valor"] + 0.15), 2)
+        detalle["aire_ruido"]["nota"] += f"; {', '.join(tranquilidad)}"
 
     f = contexto.get("fotos")
     if f:

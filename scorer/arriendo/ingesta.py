@@ -260,9 +260,42 @@ def cargar_isocrona(fuente: dict, conn) -> int:
     return len(puntos)
 
 
+def cargar_venta(fuente: dict, conn) -> int:
+    """Anuncios de venta de Fincaraíz (3+ habitaciones, una página por barrio): referencia para comprar."""
+    nav = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/131.0.0.0 Safari/537.36", "Accept-Language": "es-CO,es;q=0.9"}
+    n = 0
+    for slug in fuente["barrios"]:
+        try:
+            r = HTTP.get(f"https://www.fincaraiz.com.co/venta/apartamentos/{slug}/bogota/3-o-mas-habitaciones?ordenListado=3",
+                         headers=nav)
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
+            datos = json.loads(m.group(1))["props"]["pageProps"]["fetchResult"]["searchFast"]["data"] if m else []
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+            log.warning("Venta en %s falló: %s", slug, e)
+            datos = []
+        for d in datos:
+            ficha = {t.get("field"): t.get("value") for t in d.get("technicalSheet") or []}
+            num = lambda v: int(re.sub(r"[^0-9]", "", str(v))) if v and re.sub(r"[^0-9]", "", str(v)) else None
+            precio = (d.get("price") or {}).get("amount")
+            if not precio or not isinstance(d.get("latitude"), (int, float)):
+                continue
+            conn.execute("""INSERT INTO venta (id, barrio, precio, area, habitaciones, estrato, geom)
+                            VALUES (%s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+                            ON CONFLICT (id) DO UPDATE SET precio = EXCLUDED.precio, visto = now()""",
+                         (f"fincaraiz:{d['id']}", slug, precio, d.get("m2apto") or d.get("m2Built") or d.get("m2"),
+                          num(ficha.get("bedrooms")), num(ficha.get("stratum")), d["longitude"], d["latitude"]))
+            n += 1
+        time.sleep(3)
+    conn.execute("""UPDATE venta v SET sector = s.codigo, localidad = s.localidad FROM sector s
+                    WHERE v.sector IS NULL AND ST_Contains(s.geom, v.geom)""")
+    return n
+
+
 LECTORES = {"seguridad_sector": cargar_sector, "delitos_localidad": cargar_localidad,
             "estratos": cargar_estratos, "estaciones_tm": cargar_estaciones, "osm": cargar_osm,
-            "isocrona": cargar_isocrona, "aire_pm25": cargar_aire}
+            "isocrona": cargar_isocrona, "aire_pm25": cargar_aire,
+            "venta_fincaraiz": cargar_venta}
 
 
 def run(forzar: bool = False) -> None:
