@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import yaml
 
-from . import comparar, db, externos, ingesta, mercado
+from . import comparar, db, externos, ingesta, mercado, rotacion
 from .externos import e
 from .puntaje import evaluar
 
@@ -183,7 +183,7 @@ def guardar(conn, f: dict) -> bool:
                              THEN inmueble.imagenes ELSE EXCLUDED.imagenes END,
              descripcion = coalesce(EXCLUDED.descripcion, inmueble.descripcion),
              geom = coalesce(EXCLUDED.geom, inmueble.geom),
-             crudo = EXCLUDED.crudo, visto_ultimo = now()""", f)
+             crudo = EXCLUDED.crudo, visto_ultimo = now(), retirado = NULL""", f)
     if f["total"] and (previo is None or previo["total"] != f["total"]):
         conn.execute("INSERT INTO precio (inmueble, total) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                      (f["id"], f["total"]))
@@ -502,26 +502,63 @@ def problemas(conn) -> list[tuple[str, str]]:
     return fuera
 
 
-def comprobar_retirados(conn, limite: int = 30) -> int:
-    """Abre los anuncios que dejaron de verse en los listados antes de darlos por retirados: los
-    portales solo se leen en su primera página, y bajar de página no es retirarse."""
-    filas = conn.execute("""SELECT id, url FROM inmueble
-                            WHERE retirado IS NULL AND visto_ultimo < now() - interval '3 days'
-                              AND (comprobado IS NULL OR comprobado < now() - interval '2 days')
-                            ORDER BY visto_ultimo LIMIT %s""", (limite,)).fetchall()
+def sigue_publicado(id_: str, url: str) -> bool | None:
+    """Abre el anuncio y busca la señal de retiro propia de cada portal (None: no se pudo saber).
+    - Fincaraíz: un anuncio borrado redirige al listado con `addeletedid=`; uno desactivado sigue
+      respondiendo pero trae `inactiveSimilarInfo` (le ofrece similares al visitante).
+    - Metrocuadrado: responde 200 con la página «Error 404 - Detalle».
+    - Ciencuadras: la página de un anuncio vivo trae su propio `"propertyId":<id>`."""
+    portal, resto = id_.split(":", 1)
+    ident = resto.split("-")[-1]
+    try:
+        r = externos.HTTP.get(url, headers=externos.NAVEGADOR, follow_redirects=True)
+    except Exception as e:
+        log.warning("No se pudo comprobar %s: %s", url, e)
+        return None
+    if r.status_code in (404, 410):
+        return False
+    if r.status_code != 200:
+        return None
+    final, t = str(r.url), r.text
+    if portal == "fincaraiz":
+        return "addeletedid" not in final and '"inactiveSimilarInfo":{' not in t and ident in final
+    if portal == "metrocuadrado":
+        return "<title>Error 404" not in t and ident in final
+    if portal == "ciencuadras":
+        return f'propertyId&q;:{ident}' in t or f'"propertyId":{ident}' in t
+    return ident in final and ident in t
+
+
+def comprobar_retirados(conn, limite: int = 40) -> int:
+    """Abre anuncios para saber si siguen publicados, por prioridad: primero lo que te recomiendo hoy
+    (cada 12 h), luego lo que dejó de verse en los listados (bajar de página no es retirarse) y por
+    último cualquier activo que no se haya comprobado en 5 días."""
+    filas = conn.execute("""
+        SELECT id, url FROM (
+          SELECT i.id, i.url, i.comprobado,
+                 CASE WHEN EXISTS (SELECT 1 FROM recomendacion r WHERE r.inmueble = i.id AND r.dia = current_date)
+                           AND (i.comprobado IS NULL OR i.comprobado < now() - interval '12 hours') THEN 0
+                      WHEN i.visto_ultimo < now() - interval '1 day'
+                           AND (i.comprobado IS NULL OR i.comprobado < now() - interval '2 days') THEN 1
+                      WHEN i.comprobado IS NULL OR i.comprobado < now() - interval '5 days' THEN 2 END AS prioridad
+          FROM inmueble i WHERE i.retirado IS NULL AND i.duplicado_de IS NULL) q
+        WHERE prioridad IS NOT NULL ORDER BY prioridad, comprobado NULLS FIRST LIMIT %s""", (limite,)).fetchall()
     retirados = 0
     for f in filas:
-        ident = f["id"].split(":", 1)[1].split("-")[-1]
-        try:
-            r = externos.HTTP.get(f["url"], headers=externos.NAVEGADOR, follow_redirects=True)
-            fuera = r.status_code in (404, 410) or ident not in str(r.url) or ident not in r.text
-        except Exception as e:  # sin respuesta no se concluye nada
-            log.warning("No se pudo comprobar %s: %s", f["url"], e)
-            continue
-        conn.execute(f"UPDATE inmueble SET {'retirado' if fuera else 'comprobado'} = now() WHERE id = %s", (f["id"],))
-        retirados += fuera
+        vivo = sigue_publicado(f["id"], f["url"])
+        if vivo is not None:
+            conn.execute(f"UPDATE inmueble SET {'comprobado' if vivo else 'retirado'} = now() WHERE id = %s", (f["id"],))
+            retirados += not vivo
         time.sleep(3)
+    if retirados:
+        mercado.registrar_recomendados(conn)   # que la lista de hoy no siga mostrando lo retirado
     return retirados
+
+
+@app.post("/api/comprobar", dependencies=[Depends(autorizado)])
+def comprobar(limite: int = 40) -> dict:
+    with db.connect() as conn:
+        return {"retirados": comprobar_retirados(conn, limite)}
 
 
 def purgar_fotos(conn, dias: int = 180) -> int:
@@ -905,6 +942,13 @@ def ver_recomendados(dias: int = 30) -> dict:
     with db.connect() as conn:
         datos = mercado.recomendados(conn, comparar.privado(), dias)
         datos["actual"] = comparar.referencia(conn)
+        r = rotacion.analizar(conn)
+        for i in datos["lista"]:
+            i["historial"] = rotacion.historial_de(r, i["id"])
+        datos["rotacion"] = {"medido_desde": r["medido_desde"], "dias_medidos": r["dias_medidos"],
+                             "ventana_dias": rotacion.VENTANA_DIAS,
+                             "sectores": sorted((s for s in r["sectores"].values() if "rotacion_pct" in s),
+                                                key=lambda s: s["rotacion_pct"])}
         return datos
 
 

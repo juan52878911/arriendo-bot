@@ -61,6 +61,10 @@
   <p class="muted" id="nota-supera"></p>
   <div class="grid" id="superan"></div>
 
+  <h2>Estabilidad por barrio</h2>
+  <p class="muted" id="nota-rotacion"></p>
+  <div class="tabla"><table id="rotacion"></table></div>
+
   <h2>Día a día</h2>
   <div class="card" id="dias"></div>
 </main>
@@ -99,10 +103,10 @@ function dimDe(i, nombre) { return (i.comparacion?.dimensiones || []).find(d => 
 
 function pintarComparativa(lista, actual) {
   const cab = `<tr><th>inmueble</th><th class="num">total</th><th class="num">tu parte</th><th>nivel</th><th>le gana en</th>
-    ${COLS.map(c => `<th>${c[1]}</th>`).join('')}</tr>`;
+    ${COLS.map(c => `<th>${c[1]}</th>`).join('')}<th>rotación del barrio</th></tr>`;
   const casa = actual ? `<tr class="actual"><td>Tu apartamento · ${esc(actual.sector_nombre ?? '')}</td>
     <td class="num">${peso(actual.canon_total)}</td><td class="num">${peso(actual.canon_total)}</td><td>—</td><td>—</td>
-    ${COLS.map(c => `<td>${c[2](c[3](actual))}</td>`).join('')}</tr>` : '';
+    ${COLS.map(c => `<td>${c[2](c[3](actual))}</td>`).join('')}<td>—</td></tr>` : '';
   const filas = lista.map(i => {
     const c = i.comparacion;
     return `<tr class="fila" data-id="${esc(i.id)}"><td>${c.vale_la_pena ? '<span class="ok">●</span>' : '<span style="color:var(--azul)">●</span>'}
@@ -110,11 +114,49 @@ function pintarComparativa(lista, actual) {
       <td class="num">${peso(i.total)}</td><td class="num">${peso(c.pago_tuyo)}</td><td>${esc(NIVEL[c.nivel] ?? c.nivel)}</td>
       <td>${c.gana_en.length} de ${c.total_dimensiones}</td>
       ${COLS.map(col => { const d = dimDe(i, col[0]);
-        return d ? `<td class="${d.mejora ? 'si' : 'no'}" title="${esc(d.texto)}">${col[2](d.nuevo)}</td>` : '<td>—</td>'; }).join('')}</tr>`;
+        return d ? `<td class="${d.mejora ? 'si' : 'no'}" title="${esc(d.texto)}">${col[2](d.nuevo)}</td>` : '<td>—</td>'; }).join('')}
+      ${celdaRotacion(i.historial?.sector)}</tr>`;
   }).join('');
   const t = document.getElementById('comparativa');
   t.innerHTML = cab + casa + filas;
   t.querySelectorAll('tr.fila').forEach(f => f.addEventListener('click', () => enfocar(f.dataset.id)));
+}
+
+const CLASE_ROT = { baja: 'si', media: '', alta: 'no' };
+function celdaRotacion(s) {
+  return s?.rotacion ? `<td class="${CLASE_ROT[s.rotacion]}" title="${s.publicados_mes_km2} anuncios nuevos por km² al mes">${s.rotacion}</td>` : '<td class="muted">sin datos</td>';
+}
+
+function historial(i) {
+  const h = i.historial || {}, e = h.edificio, s = h.sector;
+  if (!e) return '';
+  const quien = e.por_direccion ? 'En esta dirección' : 'En este punto del mapa';
+  const otros = (e.otros || []).slice(0, 5).map(o => `<div>· ${esc(o.desde)}: ${o.habitaciones ?? '?'} hab, ${o.area ? Math.round(o.area) + ' m²' : '?'}, ${peso(o.total)}
+      — ${o.retirado ? `se arrendó o retiró a los ${o.dias} días` : `sigue publicado (${o.dias} días)`} · <a href="${esc(o.url)}" target="_blank" rel="noopener">anuncio</a></div>`).join('');
+  return `<details class="dims"><summary>historial de paso</summary>
+    <div>${h.fecha_del_portal ? 'Publicado hace' : 'Visto por primera vez hace'} ${h.publicado_hace} día${h.publicado_hace == 1 ? '' : 's'}${h.fecha_del_portal ? '' : ' (el portal no da la fecha de publicación)'}.</div>
+    <div>${quien}: ${e.anuncios} anuncio${e.anuncios == 1 ? '' : 's'} de ${e.unidades} unidad${e.unidades == 1 ? '' : 'es'} desde ${esc(e.primero)}
+      ${e.vueltas ? ` · <span class="mal">${e.vueltas} vez/veces una unidad se volvió a publicar</span>` : ''}
+      ${e.dias_hasta_arrendar != null ? ` · se arriendan en ~${e.dias_hasta_arrendar} días` : ''}</div>
+    ${otros}
+    ${s?.rotacion ? `<div class="${s.rotacion === 'alta' ? 'mal' : s.rotacion === 'baja' ? 'ok' : ''}">Barrio ${esc(s.barrio)}: rotación ${s.rotacion}
+      (${s.publicados_mes_km2} anuncios nuevos por km² al mes, más que el ${s.rotacion_pct} % de los barrios medidos)</div>` : '<div class="muted">Barrio sin datos suficientes de rotación.</div>'}
+  </details>`;
+}
+
+function pintarRotacion(r, lista) {
+  const mios = new Set(lista.map(i => i.historial?.sector?.sector).filter(Boolean));
+  document.getElementById('nota-rotacion').textContent =
+    `Cuánta gente se va de cada barrio: anuncios publicados en los últimos ${r.ventana_dias} días por km² al mes (fecha del portal), ` +
+    `retiros y unidades que se vuelven a publicar. Medido desde ${r.medido_desde} (${r.dias_medidos} días): los retiros y las vueltas ` +
+    `se vuelven fiables con semanas de datos. Solo barrios que el radar busca. En negrita, los de tus recomendados.`;
+  const filas = [...r.sectores].sort((a, b) => (mios.has(b.sector) - mios.has(a.sector)) || a.rotacion_pct - b.rotacion_pct);
+  document.getElementById('rotacion').innerHTML = `<tr><th>barrio</th><th>rotación</th><th class="num">nuevos/km²/mes</th><th class="num">activos</th>
+      <th class="num">retirados</th><th class="num">días hasta arrendar</th><th class="num">días publicados (activos)</th><th class="num">unidades que vuelven</th><th class="num">edificios con varias unidades</th></tr>` +
+    filas.map(s => `<tr${mios.has(s.sector) ? ' style="font-weight:600"' : ''}><td>${esc(s.barrio)}</td>${celdaRotacion(s)}
+      <td class="num">${s.publicados_mes_km2}</td><td class="num">${s.activos}</td><td class="num">${s.retirados}</td>
+      <td class="num">${s.dias_hasta_arrendar ?? '—'}</td><td class="num">${s.dias_publicado_activos ?? '—'}</td>
+      <td class="num">${s.vueltas}</td><td class="num">${s.edificios_varias_unidades}</td></tr>`).join('');
 }
 
 function tarjeta(i) {
@@ -133,6 +175,7 @@ function tarjeta(i) {
     <div class="muted">Recomendado desde ${esc(i.desde ?? 'hoy')} · ${i.dias} día${i.dias == 1 ? '' : 's'} en la lista</div>
     ${historia}
     <details class="dims"><summary>comparativa con tu apartamento</summary>${dims}</details>
+    ${historial(i)}
     ${alertas}
     <a href="${esc(i.url)}" target="_blank" rel="noopener">ver anuncio</a> · <a href="#" data-id="${esc(i.id)}" class="ver">ver en el mapa</a>
   </div>`;
@@ -151,7 +194,10 @@ function pintarDias(d) {
     <h3 style="font-size:14px;margin:12px 0 4px">Entraron en el último día (${d.entraron.length})</h3>
     ${d.entraron.length ? d.entraron.map(nombre).join('<br>') : '<span class="muted">Nada nuevo.</span>'}
     <h3 style="font-size:14px;margin:12px 0 4px">Salieron (${d.salieron.length})</h3>
-    ${d.salieron.length ? d.salieron.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.barrio)}</a> · ${peso(s.total)} · <span class="muted">${esc(s.motivo)}</span>`).join('<br>') : '<span class="muted">Nada salió.</span>'}`;
+    ${d.salieron.length ? d.salieron.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.barrio)}</a> · ${peso(s.total)} · <span class="muted">${esc(s.motivo)}</span>`).join('<br>') : '<span class="muted">Nada salió.</span>'}
+    <h3 style="font-size:14px;margin:12px 0 4px">Recomendados que ya no están (7 días)</h3>
+    ${(d.retirados || []).length ? d.retirados.map(r => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.barrio)}</a> · ${peso(r.total)}
+      · <span class="muted">recomendado desde ${esc(r.desde)}, retirado el ${esc(String(r.retirado).slice(0, 10))}</span>`).join('<br>') : '<span class="muted">Ninguno.</span>'}`;
 }
 
 function enfocar(id) {
@@ -169,6 +215,7 @@ async function cargar() {
     <div class="cifra"><b class="ok">${rec.length}</b>recomendados</div>
     <div class="cifra"><b style="color:var(--azul)">${sup.length}</b>le ganan, pero se pasan</div>
     <div class="cifra"><b>${d.entraron.length} / ${d.salieron.length}</b>entraron / salieron en el último día</div>
+    <div class="cifra"><b class="mal">${(d.retirados || []).length}</b>recomendados retirados (7 días)</div>
     ${a ? `<div class="cifra"><b>${peso(a.canon_total)}</b>pagas hoy · ${a.area_m2} m² · ${a.tiempo_min} min al destino</div>` : ''}`;
   for (const i of d.lista) {
     if (!i.lat) continue;
@@ -186,6 +233,7 @@ async function cargar() {
     : '<p class="muted">Hoy nada le gana a tu apartamento dentro de tu presupuesto.</p>';
   document.getElementById('superan').innerHTML = sup.length ? sup.map(tarjeta).join('') : '<p class="muted">Ninguno.</p>';
   pintarDias(d);
+  if (d.rotacion) pintarRotacion(d.rotacion, d.lista);
   document.querySelectorAll('a.ver').forEach(x => x.addEventListener('click', ev => { ev.preventDefault(); enfocar(x.dataset.id); }));
 }
 cargar();

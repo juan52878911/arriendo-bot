@@ -374,15 +374,19 @@ def tope_supera(priv: dict | None) -> int:
 
 
 def registrar_recomendados(conn) -> dict:
-    """La foto de hoy: se borra y se rehace, así lo que sale durante el día no queda contado."""
+    """La foto de hoy: se rehace, así lo que deja de ganarle a tu apartamento durante el día no queda
+    contado. Lo que se retira queda marcado como «retirado» para saber que se fue."""
     from .comparar import privado
     hoy = date.today()
-    conn.execute("DELETE FROM recomendacion WHERE dia = %s", (hoy,))
+    conn.execute("""UPDATE recomendacion r SET tipo = 'retirado' FROM inmueble i
+                    WHERE r.dia = %s AND i.id = r.inmueble AND i.retirado IS NOT NULL""", (hoy,))
+    conn.execute("DELETE FROM recomendacion WHERE dia = %s AND tipo <> 'retirado'", (hoy,))
     conn.execute(f"""INSERT INTO recomendacion (dia, inmueble, tipo, puntaje, total, pago, nivel, gana_en)
                      SELECT %(hoy)s, i.id, CASE WHEN (i.comparacion->>'vale_la_pena')::boolean THEN 'recomendado' ELSE 'supera' END,
                             i.puntaje, i.total, (i.comparacion->>'pago_tuyo')::bigint, i.comparacion->>'nivel',
                             ARRAY(SELECT jsonb_array_elements_text(i.comparacion->'gana_en'))
-                     {SUPERAN}""", {"hoy": hoy, "tope": tope_supera(privado())})
+                     {SUPERAN}
+                     ON CONFLICT (dia, inmueble) DO NOTHING""", {"hoy": hoy, "tope": tope_supera(privado())})
     return {r["tipo"]: r["n"] for r in conn.execute(
         "SELECT tipo, count(*) AS n FROM recomendacion WHERE dia = %s GROUP BY tipo", (hoy,)).fetchall()}
 
@@ -409,7 +413,7 @@ def recomendados(conn, priv: dict | None, dias: int = 30) -> dict:
     if len(ult) == 2:
         hoy, ayer = ult[0]["dia"], ult[1]["dia"]
         entraron = [r["inmueble"] for r in conn.execute(
-            """SELECT inmueble FROM recomendacion WHERE dia = %(h)s
+            """SELECT inmueble FROM recomendacion WHERE dia = %(h)s AND tipo <> 'retirado'
                EXCEPT SELECT inmueble FROM recomendacion WHERE dia = %(a)s""", {"h": hoy, "a": ayer}).fetchall()]
         salieron = conn.execute(
             """SELECT r.inmueble AS id, r.total, r.tipo, i.url, coalesce(s.nombre, i.barrio_portal) AS barrio,
@@ -418,8 +422,16 @@ def recomendados(conn, priv: dict | None, dias: int = 30) -> dict:
                            WHEN i.total > r.total THEN 'subió de precio'
                            ELSE coalesce(i.comparacion->>'motivo', 'ya no le gana a tu apartamento') END AS motivo
                FROM recomendacion r JOIN inmueble i ON i.id = r.inmueble LEFT JOIN sector s ON s.codigo = i.sector
-               WHERE r.dia = %(a)s AND r.inmueble NOT IN (SELECT inmueble FROM recomendacion WHERE dia = %(h)s)""",
+               WHERE r.dia = %(a)s AND r.tipo <> 'retirado'
+                 AND r.inmueble NOT IN (SELECT inmueble FROM recomendacion WHERE dia = %(h)s AND tipo <> 'retirado')""",
             {"h": hoy, "a": ayer}).fetchall()
-    return {"lista": lista, "serie": serie, "entraron": entraron, "salieron": salieron,
+    # Lo que estuvo recomendado esta semana y se comprobó retirado: se arrendó o lo bajaron.
+    retirados = conn.execute("""
+        SELECT DISTINCT ON (i.id) i.id, i.url, i.total, i.retirado, coalesce(s.nombre, i.barrio_portal) AS barrio,
+               r.tipo, (SELECT min(dia) FROM recomendacion x WHERE x.inmueble = i.id) AS desde
+        FROM recomendacion r JOIN inmueble i ON i.id = r.inmueble LEFT JOIN sector s ON s.codigo = i.sector
+        WHERE r.dia >= current_date - 7 AND i.retirado >= now() - interval '7 days'
+        ORDER BY i.id, r.dia DESC""").fetchall()
+    return {"lista": lista, "serie": serie, "entraron": entraron, "salieron": salieron, "retirados": retirados,
             "dia": ult[0]["dia"] if ult else None, "tope_supera": tope_supera(priv),
             "futuro_desde": str(((priv or {}).get("ingresos", {}).get("futuro") or {}).get("desde") or "")}

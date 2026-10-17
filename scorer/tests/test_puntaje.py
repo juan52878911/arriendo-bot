@@ -176,3 +176,18 @@ def test_mejor_que_actual_no_depende_del_precio():
     i = base(total=2500000, area=72, tiempo_min=32)
     c = comparar(i, {"seguridad_pct": 0.3, "ruido_noche_db": 57.5, "pm25": 11}, evaluar(i, {}, CFG), REF, priv)
     assert c["mejor_que_actual"] and not c["asequible"] and not c["vale_la_pena"]   # paga 1,7 M > 1,5 M
+
+
+def test_edificio_por_placa_y_unidad_que_vuelve():
+    from datetime import datetime, timedelta, timezone
+    from arriendo.rotacion import clave_edificio, vueltas
+    a = clave_edificio("Calle 80 # 10 - 43 Apto 402", 4.6, -74.06, set())
+    assert a == clave_edificio("CL 80 #10-43", None, None, set()) == "dir:cl 80 10 43"
+    assert clave_edificio("Carrera 47 con 58", 4.6, -74.06, set()).startswith("geo:")
+    assert clave_edificio("av dorado", 4.6, -74.06, {(round(4.6 / 0.00015), round(-74.06 / 0.00015))}) is None
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    def anuncio(ini, fin, retirado=True):
+        return {"publicado": None, "visto_primero": t0 + timedelta(days=ini), "visto_ultimo": t0 + timedelta(days=fin),
+                "retirado": t0 + timedelta(days=fin) if retirado else None}
+    assert vueltas([anuncio(0, 30), anuncio(200, 230), anuncio(400, 410, False)]) == 2
+    assert vueltas([anuncio(0, 30), anuncio(10, 40)]) == 0   # a la vez: dos inmobiliarias, no una vuelta
