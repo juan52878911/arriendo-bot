@@ -13,6 +13,7 @@ zonas_preferidas:
   # Sectores catastrales (≈ barrios). Coincidencia sin tildes y por prefijo:
   # "SANTA BARBARA" incluye SANTA BARBARA OCCIDENTAL.
   sectores: []
+  # Ampliación (zona de 45 min): no son tus preferidos, cuentan como localidad cercana.
   # Medio punto si cae en la localidad aunque no en un barrio de la lista.
   localidades: []
 

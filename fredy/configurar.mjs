@@ -13,12 +13,13 @@ import { upsertJob } from './lib/services/storage/jobStorage.js';
 import { upsertSettings } from './lib/services/storage/settingsStorage.js';
 
 // Una URL por portal y barrio. Cada portal filtra distinto:
-// - Fincaraíz: 3+ habitaciones, hasta $3.000.000 y más recientes primero, todo en la URL.
+// - Fincaraíz: 3+ habitaciones y más recientes primero, sin tope de precio: los más caros sirven de
+//   referencia de mercado (el puntaje sigue filtrando por presupuesto).
 // - Metrocuadrado: 3 habitaciones en la ruta; ordena por relevancia y trae hasta 50.
 // - Ciencuadras: solo el barrio (el servidor ignora los filtros); trae los 20 más recientes.
 // null = el portal no reconoce ese barrio (comprobado el 2026-10-14) o, en Ciencuadras, ya lo cubre la
 // lista de su localidad (Barrios Unidos o Teusaquillo).
-const fincaraiz = (slug) => `https://www.fincaraiz.com.co/arriendo/apartamentos/${slug}/bogota/3-o-mas-habitaciones/hasta-3000000?ordenListado=3`;
+const fincaraiz = (slug) => `https://www.fincaraiz.com.co/arriendo/apartamentos/${slug}/bogota/3-o-mas-habitaciones?ordenListado=3`;
 const metrocuadrado = (slug) => `https://www.metrocuadrado.com/apartamentos/arriendo/bogota/${slug}/3-habitaciones/`;
 const ciencuadras = (slug) => `https://www.ciencuadras.com/arriendo/apartamento/bogota/${slug}`;
 
