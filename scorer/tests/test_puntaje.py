@@ -226,3 +226,10 @@ def test_estabilidad_combina_encuesta_y_portales_y_compara_con_tu_barrio():
     assert d["mejora"] and d["actual"] == 8.0 and d["nuevo"] == 3.0 and "~33 años" in d["texto"]
     parecido = comparar(i, {"seguridad_pct": 0.3, "estabilidad": estable | {"llegaron_12m_pct": 7.0}}, evaluar(i, {}, CFG), ref, PRIV)
     assert "estabilidad" not in parecido["gana_en"]
+
+
+def test_estabilidad_sube_el_puntaje():
+    rota = evaluar(base(), {"estabilidad": {"estable_pct": 5, "llegaron_12m_pct": 9.0, "propietarios_pct": 20}}, CFG)
+    estable = evaluar(base(), {"estabilidad": {"estable_pct": 95, "llegaron_12m_pct": 2.0, "propietarios_pct": 60}}, CFG)
+    assert estable["puntaje"] > rota["puntaje"] + 8
+    assert evaluar(base(), {}, CFG)["detalle"]["estabilidad"]["valor"] == 0.5

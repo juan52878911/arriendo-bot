@@ -117,6 +117,15 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
     else:
         poner("seguridad", 0.5, "sin datos de seguridad del sector")
 
+    # Estabilidad: percentil de la UPZ entre todas las de Bogotá (100 = donde menos hogares llegan cada año).
+    est = contexto.get("estabilidad") or {}
+    if est.get("estable_pct") is not None:
+        poner("estabilidad", est["estable_pct"] / 100,
+              f"{est['llegaron_12m_pct']:.1f} % de los hogares llegó en el último año, {est['propietarios_pct']:.0f} % propietarios "
+              f"(más estable que el {est['estable_pct']:.0f} % de Bogotá)")
+    else:
+        poner("estabilidad", 0.5, "sin datos de la Encuesta Multipropósito para el barrio")
+
     if i.get("tiempo_min") is not None:
         poner("tiempo", _lineal(i["tiempo_min"], b["tiempo_max_min"], par["tiempo_ideal_min"]),
               f"{i['tiempo_min']} min al destino ({i.get('tiempo_fuente')})")

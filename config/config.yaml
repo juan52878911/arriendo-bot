@@ -21,14 +21,15 @@ pesos:                            # suman 100; prioridades: seguridad, ruido y s
   seguridad: 20
   aire_ruido: 15                  # PM2.5 (SDA), ruido nocturno (mapa de ruido), vías principales y señales de tranquilidad
   servicios: 10                   # planta eléctrica, tanque de reserva, fibra, antigüedad del edificio
-  zona: 10
+  estabilidad: 10                # buscas quedarte años: hogares que llegan al barrio cada año (Encuesta Multipropósito)
+  zona: 5
   tiempo: 10
   fotos: 5                        # lo que el servicio de visión ve en las fotos (config/vision.yaml)
-  precio_m2: 5
+  precio_m2: 3
   area: 5
   estrato: 5
   cocina: 5
-  amenidades: 5
+  amenidades: 2
   entorno: 5                      # parque grande cerca, supermercados o plaza de mercado
   transporte: 0                   # ya lo mide el tiempo al destino
   luz: 0                          # palabras sobre luz; las fotos ya lo miden
