@@ -11,6 +11,10 @@ donde quedarse años y no uno donde todos se van al cumplir el contrato.
 
 Con pocos días medidos, los «vuelve» y los retirados aún son pocos; la publicación (que viene del
 portal) ya sirve desde el primer día.
+
+La medida estable es la de la Encuesta Multipropósito (comparar.estabilidad_de): hogares de la UPZ que
+llegaron al barrio en el último año, propietarios y arrendatarios. `combinar` la mezcla con la rotación
+de los portales: 60 % encuesta y 40 % portales cuando hay ambas, solo la encuesta si no.
 """
 
 import re
@@ -18,6 +22,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
 
+from .comparar import estabilidad_de
 from .mercado import _direccion
 
 PLACA = re.compile(r"\b(cl|cr|dg|tv|av)\s+(\d+)\s*([a-z]?)\s*(?:bis\s*)?([a-z]?)\s+(\d+)\s*([a-z]?)\s+(\d+)\b")
@@ -140,7 +145,24 @@ def por_sector(conn, filas: list[dict], unidades: dict) -> dict:
     for k, s in enumerate(con_datos):
         s["rotacion_pct"] = round(100 * k / max(len(con_datos) - 1, 1))
         s["rotacion"] = "alta" if s["rotacion_pct"] >= 67 else "media" if s["rotacion_pct"] >= 33 else "baja"
+    em = estabilidad_de(conn, list(salida))
+    for codigo, s in salida.items():
+        s.update(combinar(s.get("rotacion_pct"), em.get(codigo)))
     return salida
+
+
+def combinar(rotacion_pct: int | None, em: dict | None) -> dict:
+    """Estabilidad del barrio, 0-100 (100 = la gente se queda): encuesta y rotación de los portales."""
+    partes = [(0.6, em["estable_pct"])] if em and em.get("estable_pct") is not None else []
+    if rotacion_pct is not None:
+        partes.append((0.4, 100 - rotacion_pct))
+    if not partes:
+        return {"em": em}
+    pct = round(sum(p * v for p, v in partes) / sum(p for p, _ in partes))
+    return {"em": em, "estabilidad_pct": pct,
+            "estabilidad": "alta" if pct >= 67 else "media" if pct >= 33 else "baja",
+            "estabilidad_fuente": " + ".join(([em["edicion"]] if em and em.get("estable_pct") is not None else [])
+                                             + (["portales"] if rotacion_pct is not None else []))}
 
 
 def analizar(conn) -> dict:

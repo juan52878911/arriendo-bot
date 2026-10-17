@@ -230,7 +230,8 @@ def contexto(conn, i: dict, cfg: dict) -> dict:
     if s:
         ctx.update(sector=s["codigo"], sector_nombre=s["nombre"], localidad=s["localidad"],
                    seguridad_pct=s["seguridad_pct"], periodo=s["periodo"], estrato_moda=s["estrato_moda"],
-                   **comparar.por_km2(s["incidentes"], s["area_km2"]))
+                   **comparar.por_km2(s["incidentes"], s["area_km2"]),
+                   estabilidad=comparar.estabilidad_de(conn, [s["codigo"]]).get(s["codigo"]))
     else:
         l = conn.execute("SELECT nombre FROM localidad WHERE ST_Contains(geom, %s::geometry) LIMIT 1",
                          (i["geom"],)).fetchone()
@@ -947,8 +948,8 @@ def ver_recomendados(dias: int = 30) -> dict:
             i["historial"] = rotacion.historial_de(r, i["id"])
         datos["rotacion"] = {"medido_desde": r["medido_desde"], "dias_medidos": r["dias_medidos"],
                              "ventana_dias": rotacion.VENTANA_DIAS,
-                             "sectores": sorted((s for s in r["sectores"].values() if "rotacion_pct" in s),
-                                                key=lambda s: s["rotacion_pct"])}
+                             "sectores": sorted((s for s in r["sectores"].values() if "estabilidad_pct" in s),
+                                                key=lambda s: -s["estabilidad_pct"])}
         return datos
 
 

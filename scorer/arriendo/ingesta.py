@@ -5,6 +5,7 @@ Uso:  python -m arriendo.ingesta            # solo las fuentes vencidas
 """
 
 import collections
+import csv
 import io
 import json
 import logging
@@ -129,6 +130,139 @@ def cargar_estratos(fuente: dict, conn) -> int:
         conn.execute("UPDATE sector SET estratos = %s, estrato_moda = %s WHERE codigo = %s",
                      (json.dumps(dict(cuenta)), moda, codigo))
     return lotes
+
+
+
+def cargar_upz(fuente: dict, conn) -> int:
+    """Polígonos de UPZ; Parque Entrenubes viene partido en dos localidades y se une en uno."""
+    partes: dict = collections.defaultdict(list)
+    for f in arcgis(fuente["url"]):
+        p, geom = f["properties"], _geom(f)
+        if geom and p.get("CODIGO_UPZ"):
+            partes[str(p["CODIGO_UPZ"])].append((p["NOMBRE"], str(p.get("CODIGO_LOCALIDAD") or ""), geom))
+    for codigo, ps in partes.items():
+        conn.execute(
+            """INSERT INTO upz (codigo, nombre, localidad, geom)
+               SELECT %(c)s, %(n)s, %(l)s, ST_Multi(ST_Union(ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(g), 4326))))
+               FROM unnest(%(g)s::text[]) g
+               ON CONFLICT (codigo) DO UPDATE SET nombre = EXCLUDED.nombre, localidad = EXCLUDED.localidad, geom = EXCLUDED.geom""",
+            {"c": codigo, "n": ps[0][0].title(), "l": ps[0][1], "g": [g for _, _, g in ps]})
+    return len(partes)
+
+
+# Columnas de la Encuesta Multipropósito que hacen falta (diccionario EM 2021).
+COLUMNAS_EM = ("MPIO", "COD_LOCALIDAD", "NOMBRE_LOCALIDAD", "COD_UPZ_GRUPO", "NOMBRE_UPZ_GRUPO", "FEX_C",
+               "NPCEP6", "NPCEP16_1", "NPCEP16A", "NHCCP1", "NHCCP6", "NHCCP11", "NHCCP11A")
+
+
+def _mediana_ponderada(pares: list[tuple[float, float]]) -> float | None:
+    if not pares:
+        return None
+    pares = sorted(pares)
+    mitad, acumulado = sum(w for _, w in pares) / 2, 0.0
+    for valor, w in pares:
+        acumulado += w
+        if acumulado >= mitad:
+            return valor
+    return pares[-1][0]
+
+
+def resumir_em(filas, anio: int) -> dict:
+    """Personas de la encuesta → un resumen por UPZ o grupo de UPZ, con un hogar por jefe de hogar
+    (NPCEP6 = 1) y pesos FEX_C. Solo Bogotá urbana (los rurales no tienen UPZ)."""
+    z: dict = {}
+    for f in filas:
+        if f["MPIO"] != "11001" or f["NPCEP6"] != "1" or f["COD_UPZ_GRUPO"] in ("", "NA"):
+            continue
+        try:
+            w = float(f["FEX_C"])
+        except ValueError:
+            continue
+        d = z.setdefault(f["COD_UPZ_GRUPO"], {
+            "nombre": f["NOMBRE_UPZ_GRUPO"].strip(), "localidad": f["NOMBRE_LOCALIDAD"].strip().title(),
+            "n": 0, "w": 0.0, "propia": 0.0, "arriendo": 0.0, "resp": 0.0, "llego": 0.0,
+            "resp_arr": 0.0, "llego_arr": 0.0, "compran": 0.0, "anios": []})
+        tenencia = f["NHCCP1"]
+        arrienda = tenencia == "3"
+        d["n"] += 1
+        d["w"] += w
+        d["propia"] += w * (tenencia in ("1", "2"))
+        d["arriendo"] += w * arrienda
+        # Hace 12 meses: en este barrio (1) u otro barrio (2) del municipio, o en otro municipio/país (3, 4).
+        if f["NPCEP16A"] in ("1", "2") or f["NPCEP16_1"] in ("3", "4"):
+            llego = f["NPCEP16A"] == "2" or f["NPCEP16_1"] in ("3", "4")
+            d["resp"] += w
+            d["llego"] += w * llego
+            if arrienda:
+                d["resp_arr"] += w
+                d["llego_arr"] += w * llego
+        if arrienda and f["NHCCP11"] == "1" and f["NHCCP11A"] == "1":
+            d["compran"] += w
+        if tenencia in ("1", "2") and f["NHCCP6"].isdigit() and 1900 <= int(f["NHCCP6"]) <= anio:
+            d["anios"].append((anio - int(f["NHCCP6"]), w))
+    salida = {}
+    for codigo, d in z.items():
+        pct = lambda a, b: round(100 * a / b, 1) if b else None
+        llegaron = pct(d["llego"], d["resp"])
+        salida[codigo] = {
+            "nombre": d["nombre"], "localidad": d["localidad"], "hogares_muestra": d["n"], "hogares": round(d["w"]),
+            "propietarios_pct": pct(d["propia"], d["w"]), "arriendo_pct": pct(d["arriendo"], d["w"]),
+            "llegaron_12m_pct": llegaron, "llegaron_12m_arriendo_pct": pct(d["llego_arr"], d["resp_arr"]),
+            "permanencia_anios": round(100 / llegaron, 1) if llegaron else None,
+            "anios_propietarios": _mediana_ponderada(d["anios"]),
+            "arriendo_compraran_pct": pct(d["compran"], d["arriendo"]),
+        }
+    return salida
+
+
+def cargar_estabilidad(fuente: dict, conn) -> int:
+    """Lee los microdatos en streaming (no se guardan en disco) y deja un resumen por UPZ o grupo."""
+    def filas():
+        with HTTP.stream("GET", fuente["url"], timeout=httpx.Timeout(120, read=600)) as r:
+            r.raise_for_status()
+            lector = csv.reader(io.TextIOWrapper(_Flujo(r.iter_bytes()), encoding="latin-1", newline=""))
+            cabecera = next(lector)
+            ix = {c: cabecera.index(c) for c in COLUMNAS_EM}
+            for fila in lector:
+                if len(fila) == len(cabecera):
+                    yield {c: fila[i] for c, i in ix.items()}
+    resumen = resumir_em(filas(), fuente["anio"])
+    if len(resumen) < 50:
+        raise ValueError(f"La encuesta trae solo {len(resumen)} UPZ; no se reemplaza lo cargado")
+    grupos = {k: [str(u) for u in v] for k, v in fuente.get("grupos", {}).items()}
+    conn.execute("DELETE FROM estabilidad")
+    for codigo, e in resumen.items():
+        conn.execute(
+            """INSERT INTO estabilidad (codigo, nombre, localidad, upz, edicion, hogares_muestra, hogares, propietarios_pct,
+                 arriendo_pct, llegaron_12m_pct, llegaron_12m_arriendo_pct, permanencia_anios, anios_propietarios,
+                 arriendo_compraran_pct)
+               VALUES (%(codigo)s, %(nombre)s, %(localidad)s, %(upz)s, %(edicion)s, %(hogares_muestra)s, %(hogares)s,
+                 %(propietarios_pct)s, %(arriendo_pct)s, %(llegaron_12m_pct)s, %(llegaron_12m_arriendo_pct)s,
+                 %(permanencia_anios)s, %(anios_propietarios)s, %(arriendo_compraran_pct)s)""",
+            e | {"codigo": codigo, "upz": grupos.get(codigo, [codigo]), "edicion": fuente["edicion"]})
+    conn.execute("""WITH r AS (SELECT codigo, percent_rank() OVER (ORDER BY llegaron_12m_pct DESC) AS p
+                               FROM estabilidad WHERE llegaron_12m_pct IS NOT NULL)
+                    UPDATE estabilidad e SET estable_pct = round(100 * r.p) FROM r WHERE r.codigo = e.codigo""")
+    return len(resumen)
+
+
+class _Flujo(io.RawIOBase):
+    """Bytes de una respuesta httpx como fichero, para leer el CSV sin bajarlo entero."""
+    def __init__(self, trozos):
+        self.trozos, self.resto = trozos, b""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int:
+        while not self.resto:
+            try:
+                self.resto = next(self.trozos)
+            except StopIteration:
+                return 0
+        n = min(len(b), len(self.resto))
+        b[:n], self.resto = self.resto[:n], self.resto[n:]
+        return n
 
 
 def cargar_estaciones(fuente: dict, conn) -> int:
@@ -295,7 +429,7 @@ def cargar_venta(fuente: dict, conn) -> int:
 LECTORES = {"seguridad_sector": cargar_sector, "delitos_localidad": cargar_localidad,
             "estratos": cargar_estratos, "estaciones_tm": cargar_estaciones, "osm": cargar_osm,
             "isocrona": cargar_isocrona, "aire_pm25": cargar_aire,
-            "venta_fincaraiz": cargar_venta}
+            "venta_fincaraiz": cargar_venta, "upz": cargar_upz, "estabilidad_em": cargar_estabilidad}
 
 
 def run(forzar: bool = False) -> None:
@@ -322,6 +456,8 @@ def run(forzar: bool = False) -> None:
             log.info("Fuente %s: %s filas", fuente["id"], filas)
         conn.execute("""UPDATE sector s SET localidad = l.nombre FROM localidad l
                         WHERE ST_Contains(l.geom, ST_PointOnSurface(s.geom))""")
+        conn.execute("""UPDATE sector s SET upz = u.codigo FROM upz u
+                        WHERE ST_Contains(u.geom, ST_PointOnSurface(s.geom)) AND s.upz IS DISTINCT FROM u.codigo""")
 
 
 if __name__ == "__main__":

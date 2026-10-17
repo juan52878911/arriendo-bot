@@ -191,3 +191,38 @@ def test_edificio_por_placa_y_unidad_que_vuelve():
                 "retirado": t0 + timedelta(days=fin) if retirado else None}
     assert vueltas([anuncio(0, 30), anuncio(200, 230), anuncio(400, 410, False)]) == 2
     assert vueltas([anuncio(0, 30), anuncio(10, 40)]) == 0   # a la vez: dos inmobiliarias, no una vuelta
+
+
+def test_encuesta_multiproposito_por_upz():
+    from arriendo.ingesta import resumir_em
+    def persona(upz="69", jefe="1", w="10", tenencia="3", hace12="1", fuera="NA", compra="NA", plan="2", motivo="NA", mpio="11001"):
+        return {"MPIO": mpio, "COD_LOCALIDAD": "19", "NOMBRE_LOCALIDAD": "CIUDAD BOLIVAR", "COD_UPZ_GRUPO": upz,
+                "NOMBRE_UPZ_GRUPO": "Chapinero", "FEX_C": w, "NPCEP6": jefe, "NPCEP16_1": fuera, "NPCEP16A": hace12,
+                "NHCCP1": tenencia, "NHCCP6": compra, "NHCCP11": plan, "NHCCP11A": motivo}
+    filas = [persona(hace12="2", plan="1", motivo="1"),               # arrienda, llegó este año, planea comprar
+             persona(), persona(hace12="NA", fuera="3"),              # arrienda; llegó de otro municipio
+             persona(tenencia="1", compra="2001", w="30"),            # propietario desde hace 20 años
+             persona(jefe="3", hace12="2"),                           # no es jefe: no cuenta
+             persona(mpio="25754"), persona(upz="NA")]                # Soacha y rural: fuera
+    e = resumir_em(filas, 2021)["69"]
+    assert e["hogares_muestra"] == 4 and e["propietarios_pct"] == 50.0 and e["arriendo_pct"] == 50.0
+    assert e["llegaron_12m_pct"] == 33.3 and e["llegaron_12m_arriendo_pct"] == 66.7 and e["permanencia_anios"] == 3.0
+    assert e["anios_propietarios"] == 20 and e["arriendo_compraran_pct"] == 33.3
+
+
+def test_estabilidad_combina_encuesta_y_portales_y_compara_con_tu_barrio():
+    from arriendo.comparar import comparar
+    from arriendo.rotacion import combinar
+    em = {"estable_pct": 90, "edicion": "EM 2021"}
+    assert combinar(None, em)["estabilidad"] == "alta" and combinar(None, em)["estabilidad_fuente"] == "EM 2021"
+    mezcla = combinar(80, em)   # la encuesta dice estable, los portales que rota mucho
+    assert mezcla["estabilidad_pct"] == 62 and mezcla["estabilidad"] == "media" and mezcla["estabilidad_fuente"] == "EM 2021 + portales"
+    assert "estabilidad" not in combinar(None, None)
+    i = base(total=2400000, area=72, tiempo_min=32)
+    ref = REF | {"estabilidad": {"llegaron_12m_pct": 8.0, "permanencia_anios": 12.5, "propietarios_pct": 40}}
+    estable = {"llegaron_12m_pct": 3.0, "permanencia_anios": 33.3, "propietarios_pct": 65}
+    c = comparar(i, {"seguridad_pct": 0.3, "estabilidad": estable}, evaluar(i, {}, CFG), ref, PRIV)
+    d = next(d for d in c["dimensiones"] if d["dimension"] == "estabilidad")
+    assert d["mejora"] and d["actual"] == 8.0 and d["nuevo"] == 3.0 and "~33 años" in d["texto"]
+    parecido = comparar(i, {"seguridad_pct": 0.3, "estabilidad": estable | {"llegaron_12m_pct": 7.0}}, evaluar(i, {}, CFG), ref, PRIV)
+    assert "estabilidad" not in parecido["gana_en"]

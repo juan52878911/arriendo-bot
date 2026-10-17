@@ -97,16 +97,17 @@ const COLS = [
   ['espacio', 'área', v => v == null ? '—' : Math.round(v) + ' m²', a => a.area_m2],
   ['servicios', 'servicios', v => typeof v === 'number' ? Math.round(v * 100) + ' %' : esc(v ?? '—'), a => 'cortes frecuentes'],
   ['parqueadero', 'parqueadero', v => v ? 'sí' : 'no', a => a.parqueadero],
+  ['estabilidad', 'llegan al barrio al año', v => v == null ? '—' : Number(v).toFixed(1) + ' %', a => a.estabilidad?.llegaron_12m_pct],
 ];
 
 function dimDe(i, nombre) { return (i.comparacion?.dimensiones || []).find(d => d.dimension === nombre); }
 
 function pintarComparativa(lista, actual) {
   const cab = `<tr><th>inmueble</th><th class="num">total</th><th class="num">tu parte</th><th>nivel</th><th>le gana en</th>
-    ${COLS.map(c => `<th>${c[1]}</th>`).join('')}<th>rotación del barrio</th></tr>`;
+    ${COLS.map(c => `<th>${c[1]}</th>`).join('')}<th>estabilidad del barrio</th></tr>`;
   const casa = actual ? `<tr class="actual"><td>Tu apartamento · ${esc(actual.sector_nombre ?? '')}</td>
     <td class="num">${peso(actual.canon_total)}</td><td class="num">${peso(actual.canon_total)}</td><td>—</td><td>—</td>
-    ${COLS.map(c => `<td>${c[2](c[3](actual))}</td>`).join('')}<td>—</td></tr>` : '';
+    ${COLS.map(c => `<td>${c[2](c[3](actual))}</td>`).join('')}${celdaEstabilidad(soloEncuesta(actual.estabilidad))}</tr>` : '';
   const filas = lista.map(i => {
     const c = i.comparacion;
     return `<tr class="fila" data-id="${esc(i.id)}"><td>${c.vale_la_pena ? '<span class="ok">●</span>' : '<span style="color:var(--azul)">●</span>'}
@@ -115,7 +116,7 @@ function pintarComparativa(lista, actual) {
       <td>${c.gana_en.length} de ${c.total_dimensiones}</td>
       ${COLS.map(col => { const d = dimDe(i, col[0]);
         return d ? `<td class="${d.mejora ? 'si' : 'no'}" title="${esc(d.texto)}">${col[2](d.nuevo)}</td>` : '<td>—</td>'; }).join('')}
-      ${celdaRotacion(i.historial?.sector)}</tr>`;
+      ${celdaEstabilidad(i.historial?.sector)}</tr>`;
   }).join('');
   const t = document.getElementById('comparativa');
   t.innerHTML = cab + casa + filas;
@@ -123,6 +124,27 @@ function pintarComparativa(lista, actual) {
 }
 
 const CLASE_ROT = { baja: 'si', media: '', alta: 'no' };
+const CLASE_EST = { alta: 'si', media: '', baja: 'no' };
+// Encuesta Multipropósito de la UPZ en una frase.
+function frasesEM(e) {
+  if (!e) return '';
+  return `${e.llegaron_12m_pct?.toFixed(1)} % de los hogares llegó en el último año` +
+    (e.permanencia_anios ? ` (se quedan ~${Math.round(e.permanencia_anios)} años)` : '') +
+    ` · ${Math.round(e.propietarios_pct)} % propietarios, ${Math.round(e.arriendo_pct)} % arriendo` +
+    (e.arriendo_compraran_pct != null ? ` · ${Math.round(e.arriendo_compraran_pct)} % de los que arriendan planea comprar` : '') +
+    ` — UPZ ${e.nombre}, ${e.edicion}`;
+}
+// Tu apartamento: solo la encuesta (el radar no busca en tu barrio), con la misma escala que rotacion.combinar.
+function soloEncuesta(e) {
+  const p = e?.estable_pct;
+  return { em: e, estabilidad: p == null ? null : p >= 67 ? 'alta' : p >= 33 ? 'media' : 'baja' };
+}
+function celdaEstabilidad(s) {
+  const e = s?.em;
+  if (s?.estabilidad) return `<td class="${CLASE_EST[s.estabilidad]}" title="${esc(frasesEM(e))}${s.rotacion ? ` · portales: rotación ${s.rotacion}` : ''}">${s.estabilidad}${e ? ` · ${e.llegaron_12m_pct.toFixed(1)} %/año` : ''}</td>`;
+  if (e) return `<td title="${esc(frasesEM(e))}">${e.llegaron_12m_pct.toFixed(1)} %/año</td>`;
+  return '<td class="muted">sin datos</td>';
+}
 function celdaRotacion(s) {
   return s?.rotacion ? `<td class="${CLASE_ROT[s.rotacion]}" title="${s.publicados_mes_km2} anuncios nuevos por km² al mes">${s.rotacion}</td>` : '<td class="muted">sin datos</td>';
 }
@@ -141,22 +163,33 @@ function historial(i) {
     ${otros}
     ${s?.rotacion ? `<div class="${s.rotacion === 'alta' ? 'mal' : s.rotacion === 'baja' ? 'ok' : ''}">Barrio ${esc(s.barrio)}: rotación ${s.rotacion}
       (${s.publicados_mes_km2} anuncios nuevos por km² al mes, más que el ${s.rotacion_pct} % de los barrios medidos)</div>` : '<div class="muted">Barrio sin datos suficientes de rotación.</div>'}
+    ${s?.em ? `<div class="${s.estabilidad === 'alta' ? 'ok' : s.estabilidad === 'baja' ? 'mal' : ''}">Encuesta: ${esc(frasesEM(s.em))}</div>` : ''}
   </details>`;
 }
 
-function pintarRotacion(r, lista) {
+function pintarRotacion(r, lista, actual) {
   const mios = new Set(lista.map(i => i.historial?.sector?.sector).filter(Boolean));
+  const ed = r.sectores.find(s => s.em)?.em?.edicion ?? actual?.estabilidad?.edicion ?? 'Encuesta Multipropósito';
   document.getElementById('nota-rotacion').textContent =
-    `Cuánta gente se va de cada barrio: anuncios publicados en los últimos ${r.ventana_dias} días por km² al mes (fecha del portal), ` +
-    `retiros y unidades que se vuelven a publicar. Medido desde ${r.medido_desde} (${r.dias_medidos} días): los retiros y las vueltas ` +
-    `se vuelven fiables con semanas de datos. Solo barrios que el radar busca. En negrita, los de tus recomendados.`;
-  const filas = [...r.sectores].sort((a, b) => (mios.has(b.sector) - mios.has(a.sector)) || a.rotacion_pct - b.rotacion_pct);
-  document.getElementById('rotacion').innerHTML = `<tr><th>barrio</th><th>rotación</th><th class="num">nuevos/km²/mes</th><th class="num">activos</th>
-      <th class="num">retirados</th><th class="num">días hasta arrendar</th><th class="num">días publicados (activos)</th><th class="num">unidades que vuelven</th><th class="num">edificios con varias unidades</th></tr>` +
-    filas.map(s => `<tr${mios.has(s.sector) ? ' style="font-weight:600"' : ''}><td>${esc(s.barrio)}</td>${celdaRotacion(s)}
-      <td class="num">${s.publicados_mes_km2}</td><td class="num">${s.activos}</td><td class="num">${s.retirados}</td>
-      <td class="num">${s.dias_hasta_arrendar ?? '—'}</td><td class="num">${s.dias_publicado_activos ?? '—'}</td>
-      <td class="num">${s.vueltas}</td><td class="num">${s.edificios_varias_unidades}</td></tr>`).join('');
+    `Si la gente se queda años: ${ed} (DANE y Planeación) por UPZ —hogares que llegaron al barrio en el último año, ` +
+    `años que se quedan en promedio (100 ÷ ese porcentaje), propietarios y arrendatarios, años desde la compra y arrendatarios ` +
+    `que planean comprar— combinada con la rotación de los portales: anuncios publicados en los últimos ${r.ventana_dias} días ` +
+    `por km² al mes, medida desde ${r.medido_desde} (${r.dias_medidos} días). La encuesta pesa 60 % y los portales 40 %. ` +
+    `La encuesta no pregunta los años en la vivienda ni si piensa mudarse: son las preguntas más cercanas. En negrita, los de tus recomendados.`;
+  const filas = [...r.sectores].sort((a, b) => (mios.has(b.sector) - mios.has(a.sector)) || b.estabilidad_pct - a.estabilidad_pct);
+  const n = (v, d = 0) => v == null ? '—' : Number(v).toFixed(d);
+  const em = e => `<td>${esc(e?.nombre ?? '—')}</td><td class="num">${n(e?.llegaron_12m_pct, 1)}</td><td class="num">${n(e?.permanencia_anios)}</td>
+      <td class="num">${n(e?.propietarios_pct)}</td><td class="num">${n(e?.arriendo_pct)}</td><td class="num">${n(e?.anios_propietarios)}</td>
+      <td class="num">${n(e?.arriendo_compraran_pct)}</td>`;
+  const casa = actual?.estabilidad ? `<tr class="actual"><td>Tu apartamento · ${esc(actual.sector_nombre ?? '')}</td>${celdaEstabilidad(soloEncuesta(actual.estabilidad))}
+      ${em(actual.estabilidad)}<td class="num" colspan="5">—</td></tr>` : '';
+  document.getElementById('rotacion').innerHTML = `<tr><th>barrio</th><th>estabilidad</th><th>UPZ (encuesta)</th>
+      <th class="num">% hogares que llegó en el año</th><th class="num">años que se quedan</th><th class="num">% propietarios</th><th class="num">% arriendo</th>
+      <th class="num">años desde la compra</th><th class="num">% de arrendatarios que planea comprar</th>
+      <th>rotación portales</th><th class="num">nuevos/km²/mes</th><th class="num">retirados</th><th class="num">días hasta arrendar</th><th class="num">unidades que vuelven</th></tr>` +
+    casa + filas.map(s => `<tr${mios.has(s.sector) ? ' style="font-weight:600"' : ''}><td>${esc(s.barrio)}</td>${celdaEstabilidad(s)}
+      ${em(s.em)}${celdaRotacion(s)}<td class="num">${s.publicados_mes_km2}</td><td class="num">${s.retirados}</td>
+      <td class="num">${s.dias_hasta_arrendar ?? '—'}</td><td class="num">${s.vueltas}</td></tr>`).join('');
 }
 
 function tarjeta(i) {
@@ -233,7 +266,7 @@ async function cargar() {
     : '<p class="muted">Hoy nada le gana a tu apartamento dentro de tu presupuesto.</p>';
   document.getElementById('superan').innerHTML = sup.length ? sup.map(tarjeta).join('') : '<p class="muted">Ninguno.</p>';
   pintarDias(d);
-  if (d.rotacion) pintarRotacion(d.rotacion, d.lista);
+  if (d.rotacion) pintarRotacion(d.rotacion, d.lista, d.actual);
   document.querySelectorAll('a.ver').forEach(x => x.addEventListener('click', ev => { ev.preventDefault(); enfocar(x.dataset.id); }));
 }
 cargar();

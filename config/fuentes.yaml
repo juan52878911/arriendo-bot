@@ -41,6 +41,34 @@
   tabla: via, parque, poi, ciclorruta
   frecuencia_dias: 30
 
+- id: upz
+  descripcion: Límites de las Unidades de Planeamiento Zonal (UPZ), para unir la Encuesta Multipropósito a cada sector catastral
+  entidad: Secretaría Distrital de Planeación
+  tipo: arcgis
+  url: https://serviciosg.sdp.gov.co/server/rest/services/SERVICIOS_GEOGRAFICOS/DIVISION_FISICA/MapServer/4
+  tabla: upz
+  frecuencia_dias: 180
+
+# Microdatos de la Encuesta Multipropósito 2021 (1,25 GB, una fila por persona; Latin-1). Se lee en
+# streaming y solo se guarda el resumen por UPZ o grupo de UPZ, el nivel más fino que publica.
+# No pregunta los años en la vivienda ni si piensa mudarse: se usan las preguntas más cercanas
+# (dónde vivía hace 12 meses, año de compra de los propietarios y planes de comprar vivienda).
+# EM 2025 se recogió entre oct-2025 y feb-2026; cuando publiquen microdatos basta cambiar url y edicion.
+- id: estabilidad_em
+  descripcion: Estabilidad residencial por UPZ (tenencia, hogares que llegaron al barrio en el último año, años desde la compra, arrendatarios que planean comprar)
+  entidad: Secretaría Distrital de Planeación y DANE, Encuesta Multipropósito
+  tipo: csv
+  url: https://datosabiertos.bogota.gov.co/dataset/8ac12a95-1415-4812-b343-f07f90608014/resource/b3fd892e-b9f9-4f34-ac22-6cc50612eac9/download/em2021.csv
+  diccionario: https://datosabiertos.bogota.gov.co/dataset/8ac12a95-1415-4812-b343-f07f90608014/resource/46ca32a8-0dd3-461e-810a-31781db890f5/download/20230220_diccionario_variables_encuesta_em2021.ods
+  edicion: EM 2021
+  anio: 2021
+  tabla: estabilidad
+  frecuencia_dias: 365
+  # Grupos de UPZ de la encuesta (hoja Códigos_UPZ del diccionario) → códigos de UPZ de Planeación.
+  grupos: {"802": [46, 113], "803": [14, 15, 16], "804": [1, 9, 10], "806": [2, 3, 17], "807": [22, 103],
+           "808": [104, 106], "809": [108, 111], "810": [31, 105, 116], "811": [59, 61], "812": [56, 60],
+           "813": [115, 117], "814": [91, 93], "815": [63, 64, 68], "816": [90, 99], "817": [88, 97]}
+
 # Consultas por inmueble (no se descargan enteras; solo para candidatos que pasan los filtros):
 # - Valor de referencia del suelo por manzana, Catastro Bogotá (2026):
 #   https://serviciosgis.catastrobogota.gov.co/arcgis/rest/services/catastro/valorreferencia/MapServer/0

@@ -31,6 +31,26 @@ def por_km2(incidentes: dict | None, area_km2: float | None) -> dict:
     return {f"{t}_km2": round(incidentes.get(t, {}).get(anio, 0) / km2) for t in ("rinas", "hurto")} | {"incidentes_anio": anio}
 
 
+CAMPOS_EM = ("codigo", "nombre", "edicion", "hogares_muestra", "propietarios_pct", "arriendo_pct", "llegaron_12m_pct",
+             "llegaron_12m_arriendo_pct", "permanencia_anios", "anios_propietarios", "arriendo_compraran_pct", "estable_pct")
+
+
+def estabilidad_de(conn, sectores: list[str]) -> dict:
+    """Encuesta Multipropósito de la UPZ (o grupo de UPZ) de cada sector catastral: {sector: {...}}."""
+    if not sectores:
+        return {}
+    filas = conn.execute(f"""SELECT s.codigo AS sector, s.upz, {', '.join('e.' + c for c in CAMPOS_EM)}
+                             FROM sector s JOIN estabilidad e ON s.upz = ANY(e.upz)
+                             WHERE s.codigo = ANY(%s)""", (list(sectores),)).fetchall()
+    return {f.pop("sector"): {"upz_grupo": f.pop("codigo"), **f} for f in filas}
+
+
+def texto_estabilidad(e: dict) -> str:
+    anios = f"~{e['permanencia_anios']:.0f} años de permanencia" if e.get("permanencia_anios") else "casi nadie llega"
+    return (f"{e['llegaron_12m_pct']:.1f} % de los hogares llegó al barrio en el último año, {anios}, "
+            f"{e.get('propietarios_pct') or 0:.0f} % propietarios")
+
+
 def referencia(conn, forzar: bool = False) -> dict | None:
     """Los datos de la vivienda actual, calculados una vez y guardados en la tabla `referencia`."""
     priv = privado()
@@ -39,7 +59,12 @@ def referencia(conn, forzar: bool = False) -> dict | None:
     actual = priv["vivienda_actual"]
     fila = conn.execute("SELECT datos FROM referencia WHERE id = 'actual'").fetchone()
     if fila and not forzar and fila["datos"].get("sector") == actual["sector_catastral"] and "rinas_km2" in fila["datos"]:
-        return fila["datos"]
+        datos = fila["datos"]
+        if not datos.get("estabilidad"):   # la encuesta se cargó después: se completa sin volver a medir todo
+            datos["estabilidad"] = estabilidad_de(conn, [datos["sector"]]).get(datos["sector"])
+            if datos["estabilidad"]:
+                conn.execute("UPDATE referencia SET datos = %s WHERE id = 'actual'", (json.dumps(datos),))
+        return datos
     s = conn.execute("""SELECT codigo, nombre, localidad, estrato_moda, seguridad_pct, periodo, incidentes, area_km2,
                                ST_Y(ST_PointOnSurface(geom)) AS lat, ST_X(ST_PointOnSurface(geom)) AS lon,
                                ST_PointOnSurface(geom) AS punto
@@ -60,6 +85,7 @@ def referencia(conn, forzar: bool = False) -> dict | None:
         "area_m2": actual["area_m2"], "canon_total": actual["canon_total"], "parqueadero": actual.get("parqueadero", False),
         "servicios": "cortes frecuentes de agua, luz e internet",
         **por_km2(s["incidentes"], s["area_km2"]),
+        "estabilidad": estabilidad_de(conn, [s["codigo"]]).get(s["codigo"]),
     }
     conn.execute("""INSERT INTO referencia (id, datos) VALUES ('actual', %s)
                     ON CONFLICT (id) DO UPDATE SET datos = EXCLUDED.datos, calculada = now()""", (json.dumps(datos),))
@@ -99,6 +125,12 @@ def comparar(i: dict, ctx: dict, r: dict, ref: dict | None, priv: dict | None) -
     if i.get("area"):
         dim("espacio", ref["area_m2"], i["area"], i["area"] >= ref["area_m2"],
             f"{i['area']:.0f} m² (hoy {ref['area_m2']})")
+    # Si la gente se queda años en el barrio: hogares que llegaron en el último año (Encuesta Multipropósito).
+    e_new, e_ref = ctx.get("estabilidad") or {}, ref.get("estabilidad") or {}
+    if e_new.get("llegaron_12m_pct") is not None and e_ref.get("llegaron_12m_pct"):
+        dim("estabilidad", e_ref["llegaron_12m_pct"], e_new["llegaron_12m_pct"],
+            e_new["llegaron_12m_pct"] <= 0.8 * e_ref["llegaron_12m_pct"],
+            f"{texto_estabilidad(e_new)} (hoy {texto_estabilidad(e_ref)})")
     serv = (r["detalle"].get("servicios") or {}).get("valor", 0)
     dim("servicios", "cortes frecuentes", round(serv, 2), serv >= 0.5,
         (r["detalle"].get("servicios") or {}).get("nota", ""))

@@ -252,3 +252,32 @@ CREATE TABLE IF NOT EXISTS recomendacion (
   gana_en   text[],
   PRIMARY KEY (dia, inmueble)
 );
+
+-- UPZ (Secretaría de Planeación) y estabilidad residencial de la Encuesta Multipropósito por UPZ o
+-- grupo de UPZ. Se une a `sector` por sector.upz = ANY(estabilidad.upz).
+CREATE TABLE IF NOT EXISTS upz (
+  codigo     text PRIMARY KEY,
+  nombre     text NOT NULL,
+  localidad  text,                            -- código de localidad 1-20
+  geom       geometry(MultiPolygon, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS upz_geom ON upz USING gist (geom);
+ALTER TABLE sector ADD COLUMN IF NOT EXISTS upz text;
+
+CREATE TABLE IF NOT EXISTS estabilidad (
+  codigo                 text PRIMARY KEY,    -- COD_UPZ_GRUPO: UPZ suelta (69) o grupo de UPZ (815)
+  nombre                 text NOT NULL,
+  localidad              text,
+  upz                    text[] NOT NULL,     -- UPZ que cubre
+  edicion                text NOT NULL,       -- p. ej. "EM 2021"
+  hogares_muestra        int NOT NULL,
+  hogares                real,                -- expandidos con FEX_C
+  propietarios_pct       real,                -- vivienda propia, pagada o pagándose
+  arriendo_pct           real,
+  llegaron_12m_pct       real,                -- jefes de hogar que hace 12 meses vivían en otro barrio
+  llegaron_12m_arriendo_pct real,             -- lo mismo, solo hogares en arriendo
+  permanencia_anios      real,                -- 100 / llegaron_12m_pct: años que se queda un hogar en promedio
+  anios_propietarios     real,                -- mediana de años desde la compra, hogares propietarios
+  arriendo_compraran_pct real,                -- hogares en arriendo que planean comprar para vivir en 2 años
+  estable_pct            int                  -- percentil en Bogotá urbana por llegaron_12m_pct (100 = el más estable)
+);
