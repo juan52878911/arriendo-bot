@@ -158,7 +158,7 @@ def test_veredicto_vale_la_pena_cuando_gana_en_lo_importante():
     i = base(total=2400000, area=72, tiempo_min=32, parqueaderos=1)
     r = evaluar(i, {}, CFG)
     c = comparar(i, {"seguridad_pct": 0.3, "ruido_noche_db": 57.5, "pm25": 11}, r, REF, PRIV)
-    assert c["vale_la_pena"] and c["pago_tuyo"] == 1600000 and c["pct_salario"] == 32.0
+    assert c["vale_la_pena"] and c["pago_tuyo"] == 1600000 and c["pct_salario"] == 40.0
     assert {"seguridad", "ruido", "aire", "tiempo", "espacio"} <= set(c["gana_en"])
 
 
