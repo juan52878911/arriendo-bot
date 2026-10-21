@@ -456,7 +456,7 @@ def avisar(conn, i: dict, ctx: dict, r: dict, cfg: dict) -> None:
         f"{i['area']:.0f} m²" if i["area"] else None,
         f"{i['habitaciones']} hab / {i['banos']} baños" if i["habitaciones"] else None,
         f"estrato {i['estrato']}" if i["estrato"] else None,
-        f"{i['tiempo_min']} min al destino" if i["tiempo_min"] else None] if x)
+        f"{i['tiempo_min']} min a {cfg['destino']['nombre']}" if i["tiempo_min"] else None] if x)
     mejores = sorted(r["detalle"].items(), key=lambda kv: -kv[1]["valor"] * kv[1]["peso"])[:4]
     lineas = [f"{encabezado} · <b>{r['puntaje']:.0f}/100 · {e(zona.title())}</b>", e(datos), ""]
     lineas += [f"• {e(k)}: {e(v['nota'])}" for k, v in mejores]
@@ -936,6 +936,14 @@ def para_ti() -> dict:
         datos["por_pago"] = mercado.por_pago(conn, comparar.privado())
         datos["lista_corta"] = mercado.lista_corta(conn, comparar.privado())
         return datos
+
+
+@app.get("/api/perfil")
+def perfil() -> dict:
+    """Lo que las páginas necesitan de tu configuración: destino y filtros de la búsqueda."""
+    cfg = db.config()
+    return {"destino": cfg["destino"], "busqueda": {k: cfg["busqueda"].get(k) for k in
+            ("canon_total_max", "habitaciones_min", "banos_min", "tiempo_max_min")}}
 
 
 @app.get("/api/recomendados")

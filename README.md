@@ -2,7 +2,9 @@
 
 Radar de arriendos para Bogotá. Revisa los portales a toda hora, cruza cada anuncio con datos
 abiertos de la ciudad (seguridad, estratos, TransMilenio), le pone un puntaje de 0 a 100 según
-`config/config.yaml` y avisa por Telegram los que valen la pena. No usa IA para funcionar.
+tus criterios y avisa por Telegram los que valen la pena. No usa IA para funcionar. Si le das tu
+vivienda actual y tu presupuesto, compara cada anuncio contra donde vives y te dice cuáles mejoran tu
+situación y puedes pagar.
 
 ```
 Fredy (Fincaraíz, Metrocuadrado, Ciencuadras) ──raw──► scorer ──► PostGIS ◄── ingesta (datos abiertos, OSM)
@@ -17,7 +19,7 @@ Fredy (Fincaraíz, Metrocuadrado, Ciencuadras) ──raw──► scorer ──�
 | Pieza | Qué hace |
 |---|---|
 | [Fredy](https://github.com/orangecoding/fredy) | Programa las búsquedas, deduplica, guarda historial y tiene su propia interfaz (`:9998`). Se construye desde su código, fijado a un commit, con los portales `fredy/fincaraiz.js`, `fredy/metrocuadrado.js` y `fredy/ciencuadras.js`. |
-| `scorer/` | Recibe cada anuncio, lo ubica en su sector catastral, aplica los filtros duros, calcula el tiempo al destino con [Transitous](https://transitous.org), puntúa y avisa. Sirve el mapa. |
+| `scorer/` | Recibe cada anuncio, lo ubica en su sector catastral, aplica los filtros duros, calcula el tiempo en transporte público a tu destino con [Transitous](https://transitous.org), puntúa y avisa. Sirve el mapa, los recomendados y el análisis del mercado. |
 | `config/fuentes.yaml` | Datos abiertos que se descargan (cada 30 a 90 días) y cargan en PostGIS. |
 | `vision/` | SigLIP calcula un vector por foto; cabezas pequeñas (`config/vision.yaml`) clasifican espacio, horno, estufa, extractor, piso, ducha, luz y renders. Solo analiza fotos de candidatos cerca del umbral. |
 | `chrono/sync.sh` | Baja el historial (nuevo, bajas, subidas, retirados por barrio) y lo indexa con chrono. |
@@ -31,15 +33,36 @@ sh fredy/build.sh           # descarga Fredy fijado y le añade Fincaraíz
 docker compose up -d --build
 ```
 
-Luego se configura Fredy sin tocar su interfaz: canal HTTP hacia el scorer, un job por barrio
-(3+ habitaciones, hasta $3.000.000, más recientes primero), pasada cada 60 minutos y sin telemetría.
-Para cambiar barrios, edita la lista de `fredy/configurar.mjs` y vuelve a correrlo:
+Luego se configura Fredy sin tocar su interfaz: canal HTTP hacia el scorer, un job por barrio de
+`config/busquedas.json` (más recientes primero), pasada cada 60 minutos y sin telemetría. Para
+cambiar barrios, edita ese archivo y vuelve a correrlo (`HABITACIONES` es el mínimo de habitaciones):
 
 ```bash
 docker compose cp fredy/configurar.mjs fredy:/fredy/configurar.mjs
-docker compose exec -w /fredy fredy node configurar.mjs
+docker compose cp config/busquedas.json fredy:/fredy/busquedas.json
+docker compose exec -e HABITACIONES=3 -w /fredy fredy node configurar.mjs
 docker compose restart fredy
 ```
+
+## Tu búsqueda
+
+Lo general (cómo se puntúa, umbrales, palabras clave) está en `config/config.yaml`. Lo tuyo va en dos
+archivos que **no se suben al repositorio** (`.gitignore`) y se copian al servidor:
+
+| Archivo | Plantilla | Qué lleva |
+|---|---|---|
+| `config/privado.yaml` | `config/privado.ejemplo.yaml` | Destino diario (nombre y coordenadas), filtros (`busqueda`: habitaciones, baños, tope, tiempo máximo, localidades excluidas), barrios preferidos, pesos propios, tu vivienda actual, ingresos y niveles de pago, lista corta de direcciones |
+| `config/busquedas.json` | `config/busquedas.ejemplo.json` | Los barrios que vigila cada portal (slugs de Fincaraíz, Metrocuadrado y Ciencuadras) |
+
+Lo que defina `privado.yaml` reemplaza las secciones del mismo nombre de `config.yaml` (`destino` y
+`pesos` enteros; `busqueda`, `zonas_preferidas`, `parametros` y `avisos` clave a clave). Sin esos
+archivos el sistema funciona con los valores generales. Con `vivienda_actual` e `ingresos`:
+
+- cada anuncio se compara dimensión por dimensión con donde vives (seguridad, peleas y robos por km²,
+  ruido, aire, tiempo, espacio, servicios, parqueadero, estabilidad del barrio) y se marca si vale la
+  pena verlo según tu nivel de pago (cómodo, máximo, límite);
+- `http://<servidor>:8000/recomendados` muestra en un mapa lo que le gana a tu vivienda, la
+  comparativa, el historial de cada edificio y la estabilidad de cada barrio, guardado día a día.
 
 La interfaz de Fredy (`http://<servidor>:9998`) arranca con `admin` / `admin`: cámbiala en
 *Usuarios* la primera vez que entres.
@@ -55,7 +78,7 @@ Sin token, los avisos solo quedan en el log del scorer.
 
 ## Ajustar el puntaje
 
-`config/config.yaml` se relee en cada inmueble. Tras cambiar pesos o zonas, para repuntuar todo:
+`config/config.yaml` y `config/privado.yaml` se releen en cada inmueble. Tras cambiar pesos o zonas, para repuntuar todo:
 
 ```bash
 curl -X POST -H "Authorization: Bearer $ARRIENDO_TOKEN" http://localhost:8000/api/recalcular
@@ -67,8 +90,9 @@ curl -X POST -H "Authorization: Bearer $ARRIENDO_TOKEN" http://localhost:8000/ap
   fuentes de datos estén al día y que el servicio de visión responda. Si algo falla, avisa por
   Telegram (una vez al día por problema) y lo muestra en una franja arriba del mapa
   (`/api/estado`).
-- Un anuncio que deja de verse en los listados no se da por retirado: se abre su página (hasta 30
-  por hora, con pausa) y solo se marca si el portal ya no lo tiene.
+- Cada hora se abren hasta 40 anuncios (primero los recomendados, cada 12 h; luego los que dejaron
+  de verse en los listados) para comprobar que siguen publicados, con la señal de retiro de cada
+  portal. Lo retirado sale de las recomendaciones y queda en su historial.
 - Respaldos diarios en el NAS: PostGIS (`arriendo-*.dump`) y el SQLite de Fredy (`fredy-*.db`). Cada
   semana `servidor/probar-respaldos.sh` restaura el último en una base temporal y avisa si falla.
 - Cada semana `servidor/probar-portales.sh` abre una búsqueda real en cada portal (las pruebas de
@@ -101,9 +125,9 @@ entrenamiento.
 
 ## Gráfica integrada
 
-La visión usa la Intel UHD 630 de `pve` con OpenVINO en media precisión (f16): 12 fotos en 0,85 s
+La visión puede usar una gráfica integrada Intel (probado con una UHD 630) con OpenVINO en media precisión (f16): 12 fotos en 0,85 s
 frente a 1,69 s en CPU, con los mismos vectores (similitud ≥ 0,9999). Requiere pasar el dispositivo
-al LXC (`pct set 107 --dev0 /dev/dri/renderD128,mode=0666`) y lo usa el contenedor `vision`
+al contenedor; en un LXC de Proxmox, `pct set <id> --dev0 /dev/dri/renderD128,mode=0666` y lo usa el contenedor `vision`
 (`devices` en `docker-compose.yml`). Sin gráfica, o con `VISION_DISPOSITIVO=cpu`, sigue en CPU.
 
 ## Enseñarle a ver las fotos
@@ -116,7 +140,7 @@ repuntúa, sin volver a descargarlas.
 
 ## chrono: la memoria del servicio
 
-`servidor/analisis_chrono.py` corre cada hora en el LXC y usa [chrono](https://github.com/juan52878911/chrono)
+`servidor/analisis_chrono.py` corre cada hora en el servidor y usa [chrono](https://github.com/juan52878911/chrono)
 sobre cuatro fuentes en el NAS (`/data/chrono`): el historial del mercado (publicado, nuevo,
 bajadas y subidas, retirado; por barrio, con portal, precio y anunciante), las descripciones de los
 anuncios, los registros de los contenedores y el resultado de las tareas programadas.
@@ -135,8 +159,8 @@ Cada día a las 3 a. m. se guarda una foto de las métricas (`metrica`) y cada c
 activó (`experimento`), para comparar antes y después con datos reales. Consultas a mano:
 
 ```bash
-ssh arriendo 'cd /data/chrono && chrono top entity --level nuevo'
-ssh arriendo 'cd /data/chrono && chrono patterns --level ERROR --source jsonl:/data/chrono/logs.jsonl'
+ssh <servidor> 'cd /data/chrono && chrono top entity --level nuevo'
+ssh <servidor> 'cd /data/chrono && chrono patterns --level ERROR --source jsonl:/data/chrono/logs.jsonl'
 ```
 
 ## Uso responsable de los portales
@@ -158,7 +182,7 @@ personal: si la adaptas, mantén ese ritmo y respeta los términos de cada porta
 | Aire | Secretaría de Ambiente: PM2.5 promedio anual 2025 (RMCAB interpolada) | 8 franjas de concentración |
 | Ruido nocturno | Secretaría de Ambiente: Mapa Estratégico de Ruido 2018-2021, noche, día ordinario | Por inmueble, en dB(A) |
 | Vías principales | OpenStreetMap | Distancia por inmueble |
-| Zona de 45 min al destino | Transitous, llegada 8:15 | Polígono en el mapa (se recalcula cada 30 días) |
+| Zona alcanzable al destino | Transitous, llegada 8:15, tiempo máximo de la búsqueda | Polígono en el mapa (se recalcula cada 30 días) |
 | Entorno | OpenStreetMap: parques de 2 ha o más, supermercados y plazas, ciclorrutas | Por inmueble |
 | Valor del suelo | Catastro: mediana del m² de terreno por manzana, 2026 | Por inmueble (informativo) |
 | Siniestros viales | Secretaría de Movilidad, histórico 2015-2021 | A menos de 150 m (alerta) |

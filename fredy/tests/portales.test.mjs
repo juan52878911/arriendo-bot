@@ -19,7 +19,7 @@ const fixture = (nombre) => readFileSync(new URL(`./fixtures/${nombre}.html`, im
 const PORTALES = {
   fincaraiz: 'https://www.fincaraiz.com.co/arriendo/apartamentos/teusaquillo/bogota/3-o-mas-habitaciones/hasta-3000000?ordenListado=3',
   metrocuadrado: 'https://www.metrocuadrado.com/apartamentos/arriendo/bogota/teusaquillo/3-habitaciones/',
-  ciencuadras: 'https://www.ciencuadras.com/arriendo/apartamento/bogota/marly',
+  ciencuadras: 'https://www.ciencuadras.com/arriendo/apartamento/bogota/chapinero',
 };
 
 const enBogota = (l) => l.latitude > 4.4 && l.latitude < 4.9 && l.longitude > -74.3 && l.longitude < -73.9;
@@ -53,9 +53,9 @@ for (const [portal, url] of Object.entries(PORTALES)) {
 
 test('fincaraiz: la página N añade /paginaN a la ruta y conserva los filtros', async () => {
   const { pageUrl } = await import('../lib/provider/fincaraiz.js');
-  const u = 'https://www.fincaraiz.com.co/arriendo/apartamentos/marly/bogota/3-o-mas-habitaciones?ordenListado=3';
+  const u = 'https://www.fincaraiz.com.co/arriendo/apartamentos/chapinero/bogota/3-o-mas-habitaciones?ordenListado=3';
   assert.equal(pageUrl(u, 1), u);
-  assert.equal(pageUrl(u, 2), 'https://www.fincaraiz.com.co/arriendo/apartamentos/marly/bogota/3-o-mas-habitaciones/pagina2?ordenListado=3');
+  assert.equal(pageUrl(u, 2), 'https://www.fincaraiz.com.co/arriendo/apartamentos/chapinero/bogota/3-o-mas-habitaciones/pagina2?ordenListado=3');
 });
 
 test('ciencuadras: la rotación recorre todos los barrios sin repetir', async () => {
@@ -69,6 +69,6 @@ test('ciencuadras: la rotación recorre todos los barrios sin repetir', async ()
     vistos.push(...paginas.map((p) => p.split('/').pop()));
   }
   assert.deepEqual([...vistos].sort(), [...barrios].sort());
-  assert.deepEqual(pagesForRun('https://www.ciencuadras.com/arriendo/apartamento/bogota/marly'),
-    ['https://www.ciencuadras.com/arriendo/apartamento/bogota/marly']);
+  assert.deepEqual(pagesForRun('https://www.ciencuadras.com/arriendo/apartamento/bogota/chapinero'),
+    ['https://www.ciencuadras.com/arriendo/apartamento/bogota/chapinero']);
 });

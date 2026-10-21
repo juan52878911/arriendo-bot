@@ -1,4 +1,27 @@
 # Plantilla de config/privado.yaml (ese archivo no va al repositorio). Copia y ajusta.
+# Todo es opcional: lo que no pongas sale de config/config.yaml.
+
+# Adonde vas a diario; el tiempo en transporte público y la zona del mapa se calculan hasta aquí.
+destino:
+  nombre: Mi trabajo
+  lat: 4.6097
+  lon: -74.0817
+
+# Filtros: reemplazan clave a clave los de config.yaml. Si defines `ingresos`, el tope sale de ahí.
+busqueda:
+  habitaciones_min: 2
+  banos_min: 1
+  tiempo_max_min: 45
+  localidades_excluidas: []
+
+# Barrios (sectores catastrales, sin tildes, por prefijo) y localidades que prefieres.
+zonas_preferidas:
+  sectores: []
+  localidades: []
+
+# Pesos propios (deben sumar 100); si no los pones, se usan los de config.yaml.
+# pesos: {seguridad: 20, aire_ruido: 15, servicios: 10, estabilidad: 10, zona: 5, tiempo: 10, fotos: 5,
+#         precio_m2: 3, area: 5, estrato: 5, cocina: 5, amenidades: 2, entorno: 5, transporte: 0, luz: 0}
 
 
 vivienda_actual:
@@ -7,7 +30,8 @@ vivienda_actual:
   area_m2: 60
   canon_total: 1000000
   parqueadero: false
-  problemas: [inseguridad, ruido de vecinos, peleas, cortes de agua, cortes de luz, cortes de internet]
+  servicios: cortes frecuentes de agua   # cómo están hoy agua, luz e internet (texto libre)
+  problemas: [inseguridad, ruido de vecinos]
 
 ingresos:
   salario_mensual: 4000000          # bruto (lo usa la estimación de compra)

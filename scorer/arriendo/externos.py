@@ -12,7 +12,6 @@ import httpx
 
 log = logging.getLogger("externos")
 
-DESTINO = (4.5981, -74.0760)  # destino
 BOGOTA = timezone(timedelta(hours=-5))
 HTTP = httpx.Client(timeout=30, headers={"User-Agent": "arriendo-bot/0.1 (uso personal)"})
 
@@ -25,11 +24,18 @@ def proxima_salida() -> datetime:
     return dia.replace(hour=7, minute=30, second=0, microsecond=0)
 
 
+def destino() -> dict:
+    """Adonde vas a diario (config.yaml, o privado.yaml si lo define): {nombre, lat, lon}."""
+    from . import db
+    return db.config()["destino"]
+
+
 def minutos_a_destino(lat: float, lon: float) -> int | None:
-    """Duración del mejor itinerario en transporte público, o None si Transitous no responde."""
+    """Duración del mejor itinerario en transporte público hasta el destino, o None si Transitous no responde."""
+    d = destino()
     try:
         r = HTTP.get("https://api.transitous.org/api/v1/plan", params={
-            "fromPlace": f"{lat},{lon}", "toPlace": f"{DESTINO[0]},{DESTINO[1]}",
+            "fromPlace": f"{lat},{lon}", "toPlace": f"{d['lat']},{d['lon']}",
             "time": proxima_salida().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "numItineraries": 3})
         r.raise_for_status()

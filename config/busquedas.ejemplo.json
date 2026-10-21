@@ -1,0 +1,9 @@
+{
+  "ciencuadras_localidades": {
+    "slug-de-localidad": ["slug-de-barrio-1", "slug-de-barrio-2"]
+  },
+  "barrios": [
+    {"nombre": "Un barrio", "fincaraiz": "slug-en-fincaraiz", "metrocuadrado": "slug-en-metrocuadrado", "ciencuadras": "slug-en-ciencuadras"},
+    {"nombre": "Una localidad entera", "fincaraiz": "slug-de-localidad", "metrocuadrado": null, "ciencuadras": "slug-de-localidad"}
+  ]
+}

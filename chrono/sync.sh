@@ -4,10 +4,10 @@
 #   chrono top level                      # nuevos, bajas, subidas, retirados
 #   chrono timeline --by level --bucket 1d
 #   chrono events --level baja            # todas las bajadas de precio
-# Uso: sh chrono/sync.sh [url-del-scorer]   (por defecto http://IP-DEL-SERVIDOR:8000)
+# Uso: sh chrono/sync.sh [url-del-scorer]   (por defecto $ARRIENDO_WEB_URL o http://localhost:8000)
 set -eu
 
-SCORER="${1:-http://IP-DEL-SERVIDOR:8000}"
+SCORER="${1:-${ARRIENDO_WEB_URL:-http://localhost:8000}}"
 cd "$(dirname "$0")"
 
 curl -fsS "$SCORER/api/historial.jsonl" -o historial.jsonl

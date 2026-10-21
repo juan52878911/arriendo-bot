@@ -39,7 +39,7 @@
 </header>
 <div id="estado"></div>
 <div id="filtros">
-  <label>canon máx. <input type="number" id="f-precio" step="50000" value="3000000"></label>
+  <label>canon máx. <input type="number" id="f-precio" step="50000"></label>
   <label>puntaje mín. <input type="number" id="f-puntaje" min="0" max="100" step="5" value="0"></label>
   <label>barrio <input type="text" id="f-barrio" placeholder="p. ej. alcázares"></label>
   <label><input type="checkbox" class="f-portal" value="fincaraiz" checked> Fincaraíz</label>
@@ -57,7 +57,13 @@ const mapa = L.map('mapa').setView([4.65, -74.08], 12);
 // Mosaicos de OpenStreetMap: sin clave. Su política pide atribución visible y uso moderado.
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
   { attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom: 19 }).addTo(mapa);
-L.marker([4.5981, -74.0760], { title: 'destino' }).addTo(mapa).bindTooltip('destino');
+// El destino y el tope de precio salen de tu configuración (api/perfil).
+fetch('api/perfil').then(r => r.json()).then(p => {
+  L.marker([p.destino.lat, p.destino.lon], { title: p.destino.nombre }).addTo(mapa).bindTooltip(p.destino.nombre);
+  const precio = document.getElementById('f-precio');
+  if (!precio.value && p.busqueda.canon_total_max) { precio.value = p.busqueda.canon_total_max; pintar(); }
+  return p;
+}).catch(() => null);
 
 const peso = n => '$' + Math.round(n).toLocaleString('es-CO');
 const color = p => p >= 80 ? '#0f6e56' : p >= 70 ? '#1d9e75' : p >= 55 ? '#ba7517' : '#a32d2d';
@@ -76,7 +82,7 @@ function capaPerezosa(url, opciones, inicial) {
 }
 const tranquilo = p => `hsl(${120 - 120 * (p ?? 0.5)}, 60%, 45%)`;
 const capas = {
-  'Zona a 45 min del destino': capaPerezosa('api/capas/isocrona',
+  'Zona a tiempo máximo del destino': capaPerezosa('api/capas/isocrona',
     { style: { color: '#185fa5', weight: 1.5, fillOpacity: 0.08, dashArray: '4 4' } }, true),
   'Seguridad por barrio': capaPerezosa('api/sectores', {
     style: f => ({ weight: 0.3, color: '#888', fillOpacity: 0.22, fillColor: tranquilo(f.properties.seguridad_pct) }),

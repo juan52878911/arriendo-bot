@@ -8,9 +8,7 @@ exacta no sale del servidor.
 
 import json
 import logging
-from pathlib import Path
 
-import yaml
 
 from . import db, externos
 
@@ -18,8 +16,7 @@ log = logging.getLogger("comparar")
 
 
 def privado() -> dict | None:
-    p = db.CONFIG_DIR / "privado.yaml"
-    return yaml.safe_load(p.read_text()) if p.exists() else None
+    return db.privado() or None
 
 
 def por_km2(incidentes: dict | None, area_km2: float | None) -> dict:
@@ -83,7 +80,7 @@ def referencia(conn, forzar: bool = False) -> dict | None:
         "ruido_noche_db": externos.ruido_noche_db(s["lat"], s["lon"]),
         "tiempo_min": externos.minutos_a_destino(s["lat"], s["lon"]),
         "area_m2": actual["area_m2"], "canon_total": actual["canon_total"], "parqueadero": actual.get("parqueadero", False),
-        "servicios": "cortes frecuentes de agua, luz e internet",
+        "servicios": actual.get("servicios", "sin datos"),
         **por_km2(s["incidentes"], s["area_km2"]),
         "estabilidad": estabilidad_de(conn, [s["codigo"]]).get(s["codigo"]),
     }
@@ -132,7 +129,7 @@ def comparar(i: dict, ctx: dict, r: dict, ref: dict | None, priv: dict | None) -
             e_new["llegaron_12m_pct"] <= 0.8 * e_ref["llegaron_12m_pct"],
             f"{texto_estabilidad(e_new)} (hoy {texto_estabilidad(e_ref)})")
     serv = (r["detalle"].get("servicios") or {}).get("valor", 0)
-    dim("servicios", "cortes frecuentes", round(serv, 2), serv >= 0.5,
+    dim("servicios", ref.get("servicios", "sin datos"), round(serv, 2), serv >= 0.5,
         (r["detalle"].get("servicios") or {}).get("nota", ""))
     dim("parqueadero", ref["parqueadero"], (i.get("parqueaderos") or 0) > 0, (i.get("parqueaderos") or 0) > 0 and not ref["parqueadero"],
         "con parqueadero" if (i.get("parqueaderos") or 0) > 0 else "sin parqueadero")

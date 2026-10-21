@@ -5,3 +5,4 @@ __pycache__/
 chrono/historial.jsonl
 chrono/.chrono/
 config/privado.yaml
+config/busquedas.json

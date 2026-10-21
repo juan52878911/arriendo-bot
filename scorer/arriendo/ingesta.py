@@ -369,19 +369,22 @@ def cargar_aire(fuente: dict, conn) -> int:
 
 
 def cargar_isocrona(fuente: dict, conn) -> int:
-    """Zona desde la que se llega al destino en `minutos` o menos (llegada 8:15 de un día
-    hábil): paradas alcanzables según Transitous + lo que se camina en el tiempo que sobra."""
-    from .externos import DESTINO, proxima_salida
-    minutos, metros_min, max_m = fuente.get("minutos", 45), 75, 800
+    """Zona desde la que se llega al destino en el tiempo máximo de tu búsqueda o menos (llegada 8:15
+    de un día hábil): paradas alcanzables según Transitous + lo que se camina en el tiempo que sobra."""
+    from .externos import destino, proxima_salida
+    from .db import config
+    d = destino()
+    minutos, metros_min, max_m = config()["busqueda"].get("tiempo_max_min") or fuente.get("minutos", 45), 75, 800
     llegada = proxima_salida().replace(hour=8, minute=15)
     r = HTTP.get("https://api.transitous.org/api/v6/one-to-all", params={
-        "one": f"{DESTINO[0]},{DESTINO[1]}", "time": llegada.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "one": f"{d['lat']},{d['lon']}", "time": llegada.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "maxTravelTime": minutos, "maxPreTransitTime": 900, "arriveBy": "true",
         "transitModes": "TRANSIT", "preTransitModes": "WALK"})
     r.raise_for_status()
     puntos = [(e["place"]["lon"], e["place"]["lat"], min(max_m, (minutos - e["duration"]) * metros_min))
               for e in r.json().get("all", []) if e.get("duration", minutos) < minutos]
-    puntos.append((DESTINO[1], DESTINO[0], min(max_m * 2, minutos * metros_min)))
+    puntos.append((d["lon"], d["lat"], min(max_m * 2, minutos * metros_min)))
+    conn.execute("DELETE FROM isocrona")   # una sola zona: la del destino y el tiempo actuales
     conn.execute("""
         WITH p AS (SELECT unnest(%s::float[]) AS lon, unnest(%s::float[]) AS lat, unnest(%s::float[]) AS r)
         INSERT INTO isocrona (id, minutos, geom)
@@ -395,13 +398,16 @@ def cargar_isocrona(fuente: dict, conn) -> int:
 
 
 def cargar_venta(fuente: dict, conn) -> int:
-    """Anuncios de venta de Fincaraíz (3+ habitaciones, una página por barrio): referencia para comprar."""
+    """Anuncios de venta de Fincaraíz (N+ habitaciones, una página por barrio vigilado en
+    config/busquedas.json): referencia para comprar."""
+    from .db import busquedas, config
     nav = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
                          "Chrome/131.0.0.0 Safari/537.36", "Accept-Language": "es-CO,es;q=0.9"}
     n = 0
-    for slug in fuente["barrios"]:
+    hab = config()["busqueda"].get("habitaciones_min") or 1
+    for slug in [b["fincaraiz"] for b in busquedas() if b.get("fincaraiz")]:
         try:
-            r = HTTP.get(f"https://www.fincaraiz.com.co/venta/apartamentos/{slug}/bogota/3-o-mas-habitaciones?ordenListado=3",
+            r = HTTP.get(f"https://www.fincaraiz.com.co/venta/apartamentos/{slug}/bogota/{hab}-o-mas-habitaciones?ordenListado=3",
                          headers=nav)
             m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
             datos = json.loads(m.group(1))["props"]["pageProps"]["fetchResult"]["searchFast"]["data"] if m else []

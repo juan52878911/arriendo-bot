@@ -13,13 +13,17 @@ from arriendo.puntaje import evaluar
 
 AQUI = Path(__file__).parent
 CFG = yaml.safe_load((AQUI.parent.parent / "config" / "config.yaml").read_text())
+# Una búsqueda de prueba sobre la configuración general (la real vive en config/privado.yaml).
+CFG["busqueda"].update(canon_total_max=2_600_000, habitaciones_min=3, banos_min=2, tiempo_max_min=45,
+                       localidades_excluidas=["LOS MARTIRES"])
+CFG["zonas_preferidas"] = {"sectores": ["CHAPINERO"], "localidades": []}
 MUESTRA = json.loads((AQUI / "fincaraiz_muestra.json").read_text())
 
 
 def base(**cambios) -> dict:
     i = {"titulo": "Apartamento", "descripcion": "", "facilidades": [], "total": 2_400_000, "area": 70,
          "habitaciones": 3, "banos": 2, "estrato": 3, "piso": 5, "parqueaderos": 0,
-         "tiempo_min": None, "tiempo_fuente": None, "barrio_portal": "Alcázares"}
+         "tiempo_min": None, "tiempo_fuente": None, "barrio_portal": "Chapinero"}
     i.update(cambios)
     return i
 
@@ -49,7 +53,7 @@ def test_dato_faltante_puntua_neutro():
 
 def test_barrio_preferido_y_seguridad_suben_el_puntaje():
     malo = evaluar(base(barrio_portal="Kennedy"), {"seguridad_pct": 0.9}, CFG)["puntaje"]
-    bueno = evaluar(base(), {"sector_nombre": "ALCAZARES", "seguridad_pct": 0.1}, CFG)["puntaje"]
+    bueno = evaluar(base(), {"sector_nombre": "CHAPINERO", "seguridad_pct": 0.1}, CFG)["puntaje"]
     assert bueno > malo + 15
 
 
@@ -115,12 +119,12 @@ def test_fotos_suben_o_bajan_y_avisan_renders():
 
 def test_correo_extrae_enlaces_de_anuncios_sin_seguir_terceros():
     from arriendo import correo
-    texto = """<a href="https://www.fincaraiz.com.co/apartamento-en-arriendo-en-marly-bogota/190000001?utm=x">a</a>
-    <a href="https://www.metrocuadrado.com/inmueble/arriendo-apartamento-bogota-marly-3-habitaciones/4186-M7100420">b</a>
-    <a href="https://www.ciencuadras.com/inmueble/apartamento-en-arriendo-en-marly-bogota-3884375">c</a>
+    texto = """<a href="https://www.fincaraiz.com.co/apartamento-en-arriendo-en-chapinero-bogota/190000001?utm=x">a</a>
+    <a href="https://www.metrocuadrado.com/inmueble/arriendo-apartamento-bogota-chapinero-3-habitaciones/4186-M7100420">b</a>
+    <a href="https://www.ciencuadras.com/inmueble/apartamento-en-arriendo-en-chapinero-bogota-3884375">c</a>
     <a href="https://www.facebook.com/fincaraiz">d</a>"""
     assert correo.enlaces_de_anuncios(texto, "fincaraiz") == {
-        "https://www.fincaraiz.com.co/apartamento-en-arriendo-en-marly-bogota/190000001"}
+        "https://www.fincaraiz.com.co/apartamento-en-arriendo-en-chapinero-bogota/190000001"}
     assert len(correo.enlaces_de_anuncios(texto, "metrocuadrado")) == 1
     assert len(correo.enlaces_de_anuncios(texto, "ciencuadras")) == 1
 
@@ -137,7 +141,7 @@ def test_descarta_oficinas_que_vienen_en_busquedas_de_apartamentos():
                      url="https://www.ciencuadras.com/inmueble/oficina-en-arriendo-en-ortezal-bogota-1"), {}, CFG)
     assert any("no es vivienda" in d for d in r["descartes"])
     # Aunque el título diga apartamento (Ciencuadras), manda la URL o el tipo del portal.
-    r2 = evaluar(base(titulo="Apartamento en arriendo en Alcázares", crudo={"realEstateType": "Consultorio"}), {}, CFG)
+    r2 = evaluar(base(titulo="Apartamento en arriendo en Chapinero", crudo={"realEstateType": "Consultorio"}), {}, CFG)
     assert any("no es vivienda" in d for d in r2["descartes"])
     assert not evaluar(base(titulo="Apartamento en arriendo en Ortezal"), {}, CFG)["descartes"]
 
@@ -231,5 +235,5 @@ def test_estabilidad_combina_encuesta_y_portales_y_compara_con_tu_barrio():
 def test_estabilidad_sube_el_puntaje():
     rota = evaluar(base(), {"estabilidad": {"estable_pct": 5, "llegaron_12m_pct": 9.0, "propietarios_pct": 20}}, CFG)
     estable = evaluar(base(), {"estabilidad": {"estable_pct": 95, "llegaron_12m_pct": 2.0, "propietarios_pct": 60}}, CFG)
-    assert estable["puntaje"] > rota["puntaje"] + 8
+    assert estable["puntaje"] - rota["puntaje"] >= 0.85 * CFG["pesos"]["estabilidad"]
     assert evaluar(base(), {}, CFG)["detalle"]["estabilidad"]["valor"] == 0.5

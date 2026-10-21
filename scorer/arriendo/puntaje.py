@@ -53,6 +53,7 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
     y lo dice en su nota: un dato que falta no debe hundir ni salvar a un inmueble.
     """
     b, par, pesos = cfg["busqueda"], cfg["parametros"], cfg["pesos"]
+    destino = (cfg.get("destino") or {}).get("nombre", "el destino")
     texto = sin_tildes(" ".join([i.get("titulo") or "", i.get("descripcion") or "",
                                  " ".join(i.get("facilidades") or [])]))
     descartes, alertas, detalle = [], [], {}
@@ -81,7 +82,7 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
         descartes.append(f"localidad excluida: {contexto['localidad']}")
     if i.get("tiempo_min") is not None and i.get("tiempo_fuente") == "transitous" \
             and i["tiempo_min"] > b["tiempo_max_min"]:
-        descartes.append(f"{i['tiempo_min']} min al destino")
+        descartes.append(f"{i['tiempo_min']} min a {destino}")
 
     # Componentes ---------------------------------------------------------------------------
     def poner(nombre: str, valor: float, nota: str) -> None:
@@ -128,9 +129,9 @@ def evaluar(i: dict, contexto: dict, cfg: dict) -> dict:
 
     if i.get("tiempo_min") is not None:
         poner("tiempo", _lineal(i["tiempo_min"], b["tiempo_max_min"], par["tiempo_ideal_min"]),
-              f"{i['tiempo_min']} min al destino ({i.get('tiempo_fuente')})")
+              f"{i['tiempo_min']} min a {destino} ({i.get('tiempo_fuente')})")
     else:
-        poner("tiempo", 0.5, "tiempo al destino sin calcular")
+        poner("tiempo", 0.5, f"tiempo a {destino} sin calcular")
 
     if i.get("area"):
         poner("area", _lineal(i["area"], par["area_min_m2"], par["area_buena_m2"]), f"{i['area']:.0f} m²")

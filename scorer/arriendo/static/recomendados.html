@@ -48,7 +48,7 @@
     <b>Recomendado</b>: le gana y tu parte cabe en tu presupuesto. <b>Le gana, pero se pasa</b>: mejor que donde vives, por encima de tu límite.</p>
   <div class="cifras" id="cifras"></div>
   <div id="mapa"></div>
-  <p class="muted"><span class="ok">●</span> recomendado · <span style="color:var(--azul)">●</span> le gana, pero se pasa de tu límite · ★ destino</p>
+  <p class="muted"><span class="ok">●</span> recomendado · <span style="color:var(--azul)">●</span> le gana, pero se pasa de tu límite · ★ <span id="nombre-destino">destino</span></p>
 
   <h2>Comparativa con tu apartamento</h2>
   <p class="muted">Verde: mejor que donde vives. Rojo: igual o peor. Haz clic en una fila para verla en el mapa.</p>
@@ -81,7 +81,10 @@ mapa.on('click', () => mapa.scrollWheelZoom.enable());
 mapa.on('mouseout', () => mapa.scrollWheelZoom.disable());
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
   { attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom: 19 }).addTo(mapa);
-L.marker([4.5981, -74.0760], { title: 'destino' }).addTo(mapa).bindTooltip('★ destino');
+fetch('api/perfil').then(r => r.json()).then(p => {
+  L.marker([p.destino.lat, p.destino.lon], { title: p.destino.nombre }).addTo(mapa).bindTooltip('★ ' + p.destino.nombre);
+  document.getElementById('nombre-destino').textContent = p.destino.nombre;
+}).catch(() => {});
 fetch('api/capas/isocrona').then(r => r.json()).then(g => L.geoJSON(g,
   { style: { color: '#185fa5', weight: 1.5, fillOpacity: 0.06, dashArray: '4 4' } }).addTo(mapa)).catch(() => {});
 const marcadores = {};
@@ -95,7 +98,7 @@ const COLS = [
   ['aire', 'PM2.5', v => v == null ? '—' : Number(v).toFixed(1), a => a.pm25],
   ['tiempo', 'al destino', v => v == null ? '—' : v + ' min', a => a.tiempo_min],
   ['espacio', 'área', v => v == null ? '—' : Math.round(v) + ' m²', a => a.area_m2],
-  ['servicios', 'servicios', v => typeof v === 'number' ? Math.round(v * 100) + ' %' : esc(v ?? '—'), a => 'cortes frecuentes'],
+  ['servicios', 'servicios', v => typeof v === 'number' ? Math.round(v * 100) + ' %' : esc(v ?? '—'), a => a.servicios ?? '—'],
   ['parqueadero', 'parqueadero', v => v ? 'sí' : 'no', a => a.parqueadero],
   ['estabilidad', 'llegan al barrio al año', v => v == null ? '—' : Number(v).toFixed(1) + ' %', a => a.estabilidad?.llegaron_12m_pct],
 ];

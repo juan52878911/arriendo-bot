@@ -3,32 +3,38 @@
  * ajustes generales. Idempotente (ids fijos): se puede volver a correr tras editar la lista.
  *
  *   docker compose cp fredy/configurar.mjs fredy:/fredy/configurar.mjs
+ *   docker compose cp config/busquedas.json fredy:/fredy/busquedas.json
  *   docker compose exec -w /fredy fredy node configurar.mjs
  *   docker compose restart fredy
  */
 
+import { readFileSync } from 'node:fs';
 import SqliteConnection from './lib/services/storage/SqliteConnection.js';
 import { upsertChannel } from './lib/services/storage/configuredAdapterStorage.js';
 import { upsertJob } from './lib/services/storage/jobStorage.js';
 import { upsertSettings } from './lib/services/storage/settingsStorage.js';
 
 // Una URL por portal y barrio. Cada portal filtra distinto:
-// - Fincaraíz: 3+ habitaciones y más recientes primero, sin tope de precio: los más caros sirven de
+// - Fincaraíz: N+ habitaciones y más recientes primero, sin tope de precio: los más caros sirven de
 //   referencia de mercado (el puntaje sigue filtrando por presupuesto).
-// - Metrocuadrado: 3 habitaciones en la ruta; ordena por relevancia y trae hasta 50.
+// - Metrocuadrado: N habitaciones en la ruta; ordena por relevancia y trae hasta 50.
 // - Ciencuadras: solo el barrio (el servidor ignora los filtros); trae los 20 más recientes.
-// null = el portal no reconoce ese barrio (comprobado el 2026-10-14) o, en Ciencuadras, ya lo cubre la
-// lista de su localidad (Barrios Unidos o Teusaquillo).
-const fincaraiz = (slug) => `https://www.fincaraiz.com.co/arriendo/apartamentos/${slug}/bogota/3-o-mas-habitaciones?ordenListado=3`;
-const metrocuadrado = (slug) => `https://www.metrocuadrado.com/apartamentos/arriendo/bogota/${slug}/3-habitaciones/`;
+// HABITACIONES (por defecto 3) es el mínimo de habitaciones de tu búsqueda.
+const HAB = Number(process.env.HABITACIONES ?? 3);
+const fincaraiz = (slug) => `https://www.fincaraiz.com.co/arriendo/apartamentos/${slug}/bogota/${HAB}-o-mas-habitaciones?ordenListado=3`;
+const metrocuadrado = (slug) => `https://www.metrocuadrado.com/apartamentos/arriendo/bogota/${slug}/${HAB}-habitaciones/`;
 const ciencuadras = (slug) => `https://www.ciencuadras.com/arriendo/apartamento/bogota/${slug}`;
 
-// Ciencuadras solo muestra 20 anuncios por búsqueda y no pagina: las localidades se leen barrio a
-// barrio, rotando 10 por pasada (cada barrio cada ~3-4 h). Barrios comprobados el 2026-10-15.
-const CC_BARRIOS = {};
+// Los barrios vienen de config/busquedas.json (privado; plantilla en config/busquedas.ejemplo.json):
+//   { "ciencuadras_localidades": { "<localidad>": ["<barrio>", …] },
+//     "barrios": [{ "nombre": …, "fincaraiz": <slug|null>, "metrocuadrado": <slug|null>, "ciencuadras": <slug|null> }] }
+// Ciencuadras solo muestra 20 anuncios por búsqueda y no pagina: si su slug es una localidad de
+// `ciencuadras_localidades`, se lee barrio a barrio, rotando 10 por pasada (cada barrio cada ~3-4 h).
+// null = el portal no reconoce ese barrio o ya lo cubre otra búsqueda.
+const { ciencuadras_localidades: CC_BARRIOS = {}, barrios } = JSON.parse(
+  readFileSync(process.env.BUSQUEDAS ?? new URL('./busquedas.json', import.meta.url), 'utf8'));
 const ciencuadrasLocalidad = (slug) => `${ciencuadras(slug)}?barrios=${CC_BARRIOS[slug].join(',')}`;
-
-const BARRIOS = [];
+const BARRIOS = barrios.map((b) => [b.nombre, b.fincaraiz, b.metrocuadrado, b.ciencuadras]);
 
 await SqliteConnection.init();
 const admin = SqliteConnection.query(`SELECT id FROM users WHERE is_admin = 1 ORDER BY username LIMIT 1`)[0];
@@ -53,7 +59,7 @@ for (const [nombre, fc, m2, cc] of BARRIOS) {
     cc && { id: 'ciencuadras', name: 'Ciencuadras', url: CC_BARRIOS[cc] ? ciencuadrasLocalidad(cc) : ciencuadras(cc), enabled: true },
   ].filter(Boolean);
   upsertJob({
-    jobId: `arriendo-${fc.split('/')[0]}`,
+    jobId: `arriendo-${(fc ?? m2 ?? cc).split("/")[0]}`,
     name: `Arriendo · ${nombre}`,
     userId: admin.id,
     enabled: true,

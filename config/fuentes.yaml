@@ -76,7 +76,7 @@
 #   https://services2.arcgis.com/NEwhEo9GGSHXcRXV/arcgis/rest/services/HistoricoSiniestros/FeatureServer/0
 
 - id: isocrona
-  descripcion: Zona desde la que se llega al destino en 45 minutos (llegada 8:15, día hábil)
+  descripcion: Zona desde la que se llega al destino en el tiempo máximo de la búsqueda (llegada 8:15, día hábil)
   entidad: Transitous (GTFS de TransMilenio y SITP)
   tipo: transitous
   url: https://api.transitous.org/api/v6/one-to-all
@@ -96,10 +96,9 @@
 #   https://mapas.ambientebogota.gov.co/server/rest/services/Calidad_auditiva/MER_Nocturno_Jornada_Ordinario_dB_Bogota_DC__2018_2021/FeatureServer/0
 
 - id: venta_fincaraiz
-  descripcion: Apartamentos en venta de 3+ habitaciones en los barrios vigilados (una página por barrio), para estimar si podrías comprar
+  descripcion: Apartamentos en venta en los barrios vigilados (config/busquedas.json, una página por barrio), para estimar si podrías comprar
   entidad: Fincaraíz
   tipo: portal
   url: https://www.fincaraiz.com.co/venta/apartamentos/
   tabla: venta
   frecuencia_dias: 30
-  barrios: []
